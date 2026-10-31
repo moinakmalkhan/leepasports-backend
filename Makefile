@@ -36,14 +36,15 @@ help: ## Show this help
 ##@ Docker stack
 .PHONY: build up server infra down stop restart clean logs ps
 build: ## Build the dev image
-	$(COMPOSE) build
+	$(COMPOSE) build api
 up: .env ## Start everything in the background (db, redis, mailpit, api, worker, beat)
 	$(COMPOSE) up -d --build
 	@echo; echo "  API      http://localhost:8000/api/docs/"; echo "  Admin    http://localhost:8000/admin/"; echo "  Mailpit  http://localhost:8025"; echo
 	@echo "  First time? run: make seed   (demo catalog + users)"; echo
-server: .env ## Start infra + worker in background, run the API in the foreground
-	$(COMPOSE) up -d db redis mailpit worker beat
-	$(COMPOSE) up --build api
+server: .env ## Build, start infra + worker in background, run the API in the foreground
+	$(COMPOSE) build api
+	$(COMPOSE) up -d db redis mailpit
+	$(COMPOSE) up api worker beat
 infra: .env ## Only Postgres, Redis and Mailpit (for running Django from your venv)
 	$(COMPOSE) up -d db redis mailpit
 .env: ## Create .env from the example on first run

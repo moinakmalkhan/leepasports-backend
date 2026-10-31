@@ -3,8 +3,9 @@
 # differ inside the Docker network, so the same `.env` also works for a local virtualenv.
 name: leepasports
 
+# Only `api` builds the image; worker and beat reuse the same tag (building it
+# three times in parallel makes `up --build` fail with "image already exists").
 x-app: &app
-  build: .
   image: leepasports-api:dev
   env_file: .env
   environment: &app-env
@@ -67,6 +68,8 @@ services:
 
   api:
     <<: *app
+    build: .
+    pull_policy: never
     container_name: leepasports-api
     environment:
       <<: *app-env
@@ -87,6 +90,7 @@ services:
     <<: *app
     container_name: leepasports-worker
     command: ["celery", "-A", "config", "worker", "-l", "info", "--concurrency", "2"]
+    pull_policy: never
     depends_on:
       api: { condition: service_healthy }
     restart: unless-stopped
@@ -95,6 +99,7 @@ services:
     <<: *app
     container_name: leepasports-beat
     command: ["celery", "-A", "config", "beat", "-l", "info"]
+    pull_policy: never
     depends_on:
       api: { condition: service_healthy }
     restart: unless-stopped
