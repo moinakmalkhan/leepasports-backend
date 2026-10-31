@@ -1,0 +1,6 @@
+{% extends "email/base.html" %}{% block content %}
+<h1 style="margin:0 0 12px;font-size:22px;">Order {{ order.number }} needs your approval</h1>
+<p style="line-height:1.6;color:#334155;">Hi {{ name }}, {{ order.placed_by.full_name }} placed an order of <strong>{{ order.currency }} {{ order.grand_total }}</strong>, which is above the spending limit for their role.</p>
+{% include "email/_order_table.html" %}
+{% include "email/_button.html" with label="Review and approve" %}
+{% endblock %}

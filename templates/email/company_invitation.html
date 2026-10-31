@@ -1,0 +1,6 @@
+{% extends "email/base.html" %}{% block content %}
+<h1 style="margin:0 0 12px;font-size:22px;">You're invited to join {{ company }}</h1>
+<p style="line-height:1.6;color:#334155;">{{ inviter }} added you as <strong>{{ role }}</strong>. Accept to order teamwear, track shipments and manage quotes together.</p>
+{% include "email/_button.html" with label="Accept invitation" %}
+<p style="color:#64748b;font-size:13px;">The invitation expires in 7 days.</p>
+{% endblock %}

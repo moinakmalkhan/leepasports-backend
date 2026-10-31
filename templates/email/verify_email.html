@@ -1,0 +1,6 @@
+{% extends "email/base.html" %}{% block content %}
+<h1 style="margin:0 0 12px;font-size:22px;">Welcome, {{ name }} 👋</h1>
+<p style="line-height:1.6;color:#334155;">Confirm your email to unlock wholesale pricing, quotes and order tracking.</p>
+{% include "email/_button.html" with label="Verify my email" %}
+<p style="color:#64748b;font-size:13px;">This link expires in 48 hours. If you didn't create an account, you can ignore this email.</p>
+{% endblock %}

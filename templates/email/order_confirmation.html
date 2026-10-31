@@ -1,0 +1,11 @@
+{% extends "email/base.html" %}{% block content %}
+<h1 style="margin:0 0 6px;font-size:22px;">Thanks, {{ name }}! Order {{ order.number }} is in.</h1>
+<p style="margin:0 0 16px;color:#64748b;">{{ order.total_quantity }} pieces · Payment: {{ order.get_payment_method_display }}{% if order.po_number %} · PO {{ order.po_number }}{% endif %}</p>
+<p style="line-height:1.6;color:#334155;">
+{% if order.status == "pending_payment" %}We'll start production as soon as payment is confirmed. Bank details are on your order page.
+{% elif order.status == "pending_approval" %}Your order is waiting for approval from a company admin.
+{% else %}Your order is confirmed and scheduled for production. Estimated ship date: {{ order.estimated_ship_date }}.{% endif %}
+</p>
+{% include "email/_order_table.html" %}
+{% include "email/_button.html" with label="Track your order" %}
+{% endblock %}

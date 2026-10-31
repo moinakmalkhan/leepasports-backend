@@ -1,0 +1,5 @@
+{{ subject }}
+
+{{ html|striptags|safe }}
+
+— {{ site_name }}

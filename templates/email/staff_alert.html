@@ -1,0 +1,5 @@
+{% extends "email/base.html" %}{% block content %}
+<h1 style="margin:0 0 12px;font-size:20px;">{{ subject }}</h1>
+<table style="font-size:14px;border-collapse:collapse;">{% for k, v in items.items %}<tr><td style="padding:4px 12px 4px 0;color:#64748b;text-transform:capitalize;">{{ k }}</td><td style="padding:4px 0;">{{ v }}</td></tr>{% endfor %}</table>
+{% include "email/_button.html" with label="Open in admin" %}
+{% endblock %}

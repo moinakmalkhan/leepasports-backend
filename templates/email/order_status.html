@@ -1,0 +1,9 @@
+{% extends "email/base.html" %}{% block content %}
+<h1 style="margin:0 0 12px;font-size:22px;">{{ title }}</h1>
+<p style="line-height:1.6;color:#334155;">Hi {{ name }}, {{ body }}</p>
+{% if status == "shipped" and order.tracking_number %}
+<p style="line-height:1.6;color:#334155;">Carrier: <strong>{{ order.carrier }}</strong> · Tracking: <strong>{{ order.tracking_number }}</strong>
+{% if order.tracking_url %}<br><a href="{{ order.tracking_url }}" style="color:#f97316;">Track with carrier</a>{% endif %}</p>
+{% endif %}
+{% include "email/_button.html" with label="View order" %}
+{% endblock %}

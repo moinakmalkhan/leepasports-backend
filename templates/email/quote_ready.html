@@ -1,0 +1,6 @@
+{% extends "email/base.html" %}{% block content %}
+<h1 style="margin:0 0 12px;font-size:22px;">Your quote is ready</h1>
+<p style="line-height:1.6;color:#334155;">Hi {{ name }}, we've priced your request at <strong>{{ quote.currency }} {{ quote.quoted_total }}</strong> for {{ quote.total_quantity }} pieces. It's valid until <strong>{{ quote.valid_until }}</strong>.</p>
+{% if quote.response_message %}<blockquote style="margin:16px 0;padding:12px 16px;border-left:3px solid #f97316;background:#fff7ed;color:#334155;">{{ quote.response_message|linebreaksbr }}</blockquote>{% endif %}
+{% include "email/_button.html" with label="Review & accept quote" %}
+{% endblock %}
