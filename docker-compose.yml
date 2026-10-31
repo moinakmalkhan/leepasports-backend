@@ -20,6 +20,7 @@ x-app: &app
   volumes:
     - .:/app
     - media:/app/media
+  networks: [leepanet]
   depends_on:
     db: { condition: service_healthy }
     redis: { condition: service_healthy }
@@ -32,6 +33,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports: ["${POSTGRES_PORT:-5432}:5432"]
+    networks: [leepanet]
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -45,6 +47,7 @@ services:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports: ["${REDIS_PORT:-6379}:6379"]
+    networks: [leepanet]
     volumes: ["redisdata:/data"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -57,6 +60,7 @@ services:
     ports:
       - "${MAILPIT_PORT:-8025}:8025"   # web UI for every email the app sends
       - "1025:1025"
+    networks: [leepanet]
     environment:
       MP_SMTP_AUTH_ACCEPT_ANY: 1
       MP_SMTP_AUTH_ALLOW_INSECURE: 1
@@ -99,3 +103,10 @@ volumes:
   pgdata:
   redisdata:
   media:
+
+# Dedicated bridge network: containers resolve each other by service name
+# (db, redis, mailpit, api) and are isolated from other Compose projects.
+networks:
+  leepanet:
+    name: leepasports_net
+    driver: bridge
