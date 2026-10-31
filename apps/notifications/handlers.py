@@ -88,7 +88,10 @@ def order_status_changed(order_id, from_status, to_status):
     order = _order(order_id)
     title, body, level = STATUS_COPY.get(to_status, (to_status.replace("_", " ").title(), "", L.INFO))
     if order.user_id:
-        notify_users([order.user], kind=K.ORDER, level=level, title=f"{order.number}: {title}", body=body, url=_order_url(order))
+        from .copy_i18n import status_copy
+
+        t, b = status_copy(order.user.language, to_status, (title, body))
+        notify_users([order.user], kind=K.ORDER, level=level, title=f"{order.number}: {t}", body=b, url=_order_url(order))
     # Shipping and cancellation emails always go out; the rest respect the shopper's "order updates" preference.
     always = to_status in ("shipped", "cancelled")
     wants = order.user is None or (order.user.notification_preferences or {}).get("orders", True)
