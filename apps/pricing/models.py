@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
+from django_extensions.db.fields import AutoSlugField
 
 from apps.core.models import TimeStampedModel
 
@@ -9,7 +10,7 @@ class CustomerGroup(TimeStampedModel):
     """Tiered customer segments (Retail club, Distributor, Key account...)."""
 
     name = models.CharField(max_length=80, unique=True)
-    slug = models.SlugField(max_length=80, unique=True)
+    slug = AutoSlugField(populate_from="name", max_length=80, unique=True)
     discount_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     description = models.CharField(max_length=200, blank=True)
     is_default = models.BooleanField(default=False)

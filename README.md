@@ -79,6 +79,19 @@ tests/             pytest API tests (run against PostgreSQL)
 - Errors always look like `{"detail": "...", "code": "...", "errors": {...}}`.
 - Lists always look like `{"count", "page", "page_size", "total_pages", "next", "previous", "results"}` (feeds use cursor pagination: `{"next", "previous", "results"}`).
 
+## Developer tooling (django-extensions)
+
+| Command | What it does |
+| --- | --- |
+| `python manage.py shell_plus` | IPython shell with every model, common services and Q/F/Sum pre-imported; `SHELL_PLUS_PRINT_SQL=True` in development prints each query |
+| `python manage.py runserver_plus` | Werkzeug dev server with the interactive debugger and `--print-sql` |
+| `python manage.py show_urls` | Every API route with its view and name |
+| `python manage.py runscript <name>` | Runs `scripts/<name>.py` (`reprice_catalog`, `overdue_invoices`, `sales_snapshot`) |
+| `python manage.py graph_models -o docs/models.png` | ER diagram of all apps (needs Graphviz installed) |
+| `python manage.py validate_templates` / `sqldiff` / `reset_db` / `generate_secret_key` | Template linting, schema drift, DB reset, key generation |
+
+Models use django-extensions fields: `CreationDateTimeField`/`ModificationDateTimeField` on the shared base, `AutoSlugField` for every slug, `RandomCharField` for invitation tokens.
+
 ## Running tests
 
 ```bash

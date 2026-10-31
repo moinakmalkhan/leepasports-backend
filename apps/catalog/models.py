@@ -5,6 +5,7 @@ from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVector, SearchVectorField
 from django.db import models
 from django.db.models import Q
+from django_extensions.db.fields import AutoSlugField
 
 from apps.core.models import TimeStampedModel, UUIDModel
 
@@ -37,7 +38,7 @@ class Category(UUIDModel):
     """
 
     name = models.CharField(max_length=120)
-    slug = models.SlugField(max_length=140, unique=True)
+    slug = AutoSlugField(populate_from="name", max_length=140, unique=True)
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.CASCADE, related_name="children")
     path = models.CharField(max_length=255, editable=False, db_index=True, default="")
     depth = models.PositiveSmallIntegerField(default=0, editable=False)
@@ -94,7 +95,7 @@ class Fabric(UUIDModel):
         METER = "m", "per meter"
 
     name = models.CharField(max_length=120, unique=True)
-    slug = models.SlugField(max_length=140, unique=True)
+    slug = AutoSlugField(populate_from="name", max_length=140, unique=True)
     composition = models.CharField(max_length=160, help_text="e.g. 100% Polyester, 92% Polyester 8% Spandex")
     gsm = models.PositiveSmallIntegerField(help_text="Grams per square metre")
     quality = models.CharField(max_length=10, choices=Quality.choices, default=Quality.STANDARD)
@@ -124,7 +125,7 @@ class SizeGroup(models.Model):
     """e.g. Adult alpha (XS–5XL), Youth (YXS–YXL), Numeric (28–44)."""
 
     name = models.CharField(max_length=60, unique=True)
-    slug = models.SlugField(max_length=60, unique=True)
+    slug = AutoSlugField(populate_from="name", max_length=60, unique=True)
     sort_order = models.PositiveSmallIntegerField(default=0)
 
     class Meta:
@@ -195,7 +196,7 @@ class ProductQuerySet(models.QuerySet):
 
 class Product(UUIDModel):
     name = models.CharField(max_length=200)
-    slug = models.SlugField(max_length=220, unique=True)
+    slug = AutoSlugField(populate_from="name", max_length=220, unique=True)
     sku = models.CharField(max_length=40, unique=True)
     category = models.ForeignKey(Category, on_delete=models.PROTECT, related_name="products")
     short_description = models.CharField(max_length=300, blank=True)

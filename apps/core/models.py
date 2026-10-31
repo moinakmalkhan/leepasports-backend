@@ -1,13 +1,17 @@
 import uuid
 
 from django.db import models
+from django_extensions.db.fields import CreationDateTimeField, ModificationDateTimeField
 
 
 class TimeStampedModel(models.Model):
-    """Abstract base with created/updated timestamps (indexed on created)."""
+    """Abstract base with created/updated timestamps (indexed on created).
 
-    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    Uses django-extensions' Creation/ModificationDateTimeField so `save(update_modified=False)`
+    can skip touching `updated_at` for background bookkeeping writes."""
+
+    created_at = CreationDateTimeField(db_index=True)
+    updated_at = ModificationDateTimeField()
 
     class Meta:
         abstract = True

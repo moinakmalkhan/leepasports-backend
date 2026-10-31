@@ -60,6 +60,7 @@ DJANGO_APPS = [
 ]
 
 THIRD_PARTY_APPS = [
+    "django_extensions",
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
     "django_filters",
@@ -336,3 +337,28 @@ LOGGING = {
         "apps": {"level": "INFO"},
     },
 }
+
+# ---------------------------------------------------------------------------
+# django-extensions
+# ---------------------------------------------------------------------------
+SHELL_PLUS = "ipython"
+SHELL_PLUS_PRINT_SQL = False
+SHELL_PLUS_PRINT_SQL_TRUNCATE = 1000
+SHELL_PLUS_IMPORTS = [
+    "from decimal import Decimal",
+    "from django.db.models import Count, Sum, F, Q, Prefetch",
+    "from apps.pricing.services import compute_price, base_price_for, fabric_cost",
+    "from apps.pricing.selectors import resolve_configuration",
+    "from apps.orders import services as order_services",
+    "from apps.quotes import services as quote_services",
+    "from apps.cart import services as cart_services",
+    "from apps.catalog.services import category_tree",
+    "from apps.notifications.events import emit",
+]
+SHELL_PLUS_MODEL_ALIASES = {
+    "accounts": {"User": "U", "Company": "Co"},
+    "catalog": {"Product": "P", "Fabric": "Fab"},
+    "orders": {"Order": "O"},
+}
+GRAPH_MODELS = {"all_applications": False, "group_models": True, "app_labels": [a.split(".")[-1] for a in LOCAL_APPS]}
+RUNSERVER_PLUS_PRINT_SQL_TRUNCATE = 1000

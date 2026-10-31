@@ -148,7 +148,6 @@ class CompanyAdmin(ModelAdmin):
     )
     list_filter_submit = True
     search_fields = ("name", "legal_name", "email", "tax_id", "members__user__email")
-    prepopulated_fields = {"slug": ("name",)}
     readonly_fields = ("uid", "credit_used", "created_at", "updated_at", "orders_summary")
     inlines = (MemberInline, AddressInline)
     list_select_related = ("customer_group",)
@@ -160,7 +159,7 @@ class CompanyAdmin(ModelAdmin):
             "Company",
             {
                 "fields": (
-                    ("name", "slug"),
+                    "name",
                     "legal_name",
                     ("business_type", "country", "currency"),
                     ("email", "phone", "website"),

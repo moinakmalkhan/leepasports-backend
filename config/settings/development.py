@@ -10,3 +10,6 @@ CELERY_TASK_EAGER_PROPAGATES = True
 
 # Static files served by Django in dev; whitenoise manifest storage is strict.
 STORAGES["staticfiles"] = {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"}  # noqa: F405
+
+SHELL_PLUS_PRINT_SQL = True
+RUNSERVERPLUS_SERVER_ADDRESS_PORT = "0.0.0.0:8000"

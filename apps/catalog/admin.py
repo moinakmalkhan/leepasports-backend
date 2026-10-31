@@ -23,14 +23,13 @@ class CategoryAdmin(ModelAdmin):
     list_display = ("tree_name", "slug", "products_total", "sort_order", "active")
     list_filter = ("is_active", "depth", ("parent", RelatedDropdownFilter))
     search_fields = ("name", "slug")
-    prepopulated_fields = {"slug": ("name",)}
-    readonly_fields = ("path", "depth", "uid")
+    readonly_fields = ("slug", "path", "depth", "uid")
     list_select_related = ("parent",)
     autocomplete_fields = ("parent",)
     ordering = ("path",)
     actions = ("activate", "deactivate")
     fieldsets = (
-        (None, {"fields": (("name", "slug"), "parent", ("icon", "sort_order", "is_active"), "description", "image")}),
+        (None, {"fields": ("name", "parent", ("icon", "sort_order", "is_active"), "description", "image")}),
         ("SEO", {"classes": ("collapse",), "fields": ("meta_title", "meta_description")}),
         ("System", {"classes": ("collapse",), "fields": ("path", "depth", "uid")}),
     )
@@ -80,7 +79,6 @@ class FabricAdmin(ModelAdmin):
     list_filter = (("quality", ChoicesDropdownFilter), "is_active", "is_available_in_pakistan", ("price_pkr", RangeNumericFilter))
     list_filter_submit = True
     search_fields = ("name", "composition", "typical_mills")
-    prepopulated_fields = {"slug": ("name",)}
     list_editable = ("price_pkr",)
     actions = ("adjust_prices", "mark_prices_current", "export_fabrics")
     actions_detail = ("reprice_now",)
@@ -88,7 +86,7 @@ class FabricAdmin(ModelAdmin):
     fieldsets = (
         (
             "Fabric",
-            {"fields": (("name", "slug"), "composition", ("gsm", "width_inches"), ("quality", "quality_rank"), "description")},
+            {"fields": ("name", "composition", ("gsm", "width_inches"), ("quality", "quality_rank"), "description")},
         ),
         (
             "Mill pricing (PKR)",
@@ -185,7 +183,6 @@ class SizeInline(TabularInline):
 class SizeGroupAdmin(ModelAdmin):
     inlines = (SizeInline,)
     list_display = ("name", "sizes_list", "sort_order")
-    prepopulated_fields = {"slug": ("name",)}
     search_fields = ("name",)
 
     @display(description="Sizes")
@@ -250,8 +247,7 @@ class ProductAdmin(ModelAdmin):
     )
     list_filter_submit = True
     search_fields = ("name", "sku", "short_description", "tags")
-    prepopulated_fields = {"slug": ("name",)}
-    readonly_fields = ("uid", "base_price", "view_count", "order_count", "created_at", "updated_at", "storefront_link")
+    readonly_fields = ("uid", "slug", "base_price", "view_count", "order_count", "created_at", "updated_at", "storefront_link")
     inlines = (ImageInline, FabricOptionInline, SizeOptionInline)
     list_select_related = ("category", "base_fabric")
     autocomplete_fields = ("category", "base_fabric", "size_group")
@@ -262,7 +258,7 @@ class ProductAdmin(ModelAdmin):
     fieldsets = (
         (
             "Product",
-            {"fields": (("name", "slug", "sku"), "category", "short_description", "description", "tags", "storefront_link")},
+            {"fields": (("name", "sku", "slug"), "category", "short_description", "description", "tags", "storefront_link")},
         ),
         (
             "Pricing",

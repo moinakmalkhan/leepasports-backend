@@ -9,7 +9,6 @@ from .models import CustomerGroup, ExchangeRate, PriceListItem, VolumeTier
 @admin.register(CustomerGroup)
 class CustomerGroupAdmin(ModelAdmin):
     list_display = ("name", "discount_percent", "companies_count", "is_default")
-    prepopulated_fields = {"slug": ("name",)}
     search_fields = ("name",)
 
     @display(description="Companies")

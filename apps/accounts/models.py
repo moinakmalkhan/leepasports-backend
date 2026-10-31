@@ -3,6 +3,7 @@ from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, Permis
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
+from django_extensions.db.fields import AutoSlugField, RandomCharField
 
 from apps.core.models import TimeStampedModel, UUIDModel
 
@@ -101,7 +102,7 @@ class Company(UUIDModel):
         NET_60 = "net_60", "Net 60"
 
     name = models.CharField(max_length=160)
-    slug = models.SlugField(max_length=170, unique=True)
+    slug = AutoSlugField(populate_from="name", max_length=170, unique=True)
     legal_name = models.CharField(max_length=200, blank=True)
     business_type = models.CharField(max_length=20, choices=BusinessType.choices, default=BusinessType.CLUB)
     tax_id = models.CharField(max_length=64, blank=True)
@@ -197,7 +198,7 @@ class CompanyInvitation(UUIDModel):
     email = models.EmailField()
     role = models.CharField(max_length=10, choices=CompanyMember.Role.choices, default=CompanyMember.Role.BUYER)
     invited_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+")
-    token = models.CharField(max_length=64, unique=True)
+    token = RandomCharField(length=48, unique=True, include_alpha=True, include_digits=True)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
     expires_at = models.DateTimeField()
     accepted_at = models.DateTimeField(null=True, blank=True)

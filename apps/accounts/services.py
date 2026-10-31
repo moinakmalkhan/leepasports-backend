@@ -1,4 +1,3 @@
-import secrets
 from datetime import timedelta
 
 from django.conf import settings
@@ -6,7 +5,6 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.core.exceptions import BusinessError
-from apps.core.utils import unique_slug
 
 from . import tokens
 from .models import Company, CompanyInvitation, CompanyMember, User
@@ -22,9 +20,7 @@ def register_user(*, email, password, first_name="", last_name="", phone="", com
 
 
 def create_company(*, user, name, business_type, country="US", **extra) -> Company:
-    company = Company.objects.create(
-        name=name, slug=unique_slug(Company, name), business_type=business_type, country=country, **extra
-    )
+    company = Company.objects.create(name=name, business_type=business_type, country=country, **extra)
     CompanyMember.objects.create(
         company=company,
         user=user,
@@ -151,7 +147,6 @@ def invite_member(*, company: Company, inviter: User, email: str, role: str) -> 
         email=email,
         role=role,
         invited_by=inviter,
-        token=secrets.token_urlsafe(32),
         expires_at=timezone.now() + timedelta(days=7),
     )
     send_email_task.delay(
