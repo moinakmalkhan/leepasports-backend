@@ -9,3 +9,6 @@ staticfiles/
 *.log
 .DS_Store
 backups/
+
+# Redis snapshots
+*.rdb

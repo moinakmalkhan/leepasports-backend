@@ -1,7 +1,7 @@
 # Chobbar — backend (Django)
 
 Direct-to-consumer activewear store **chobbar.shop** (made in Sialkot, Pakistan). This repo is the API + admin.
-Clients: Next.js storefront (`leepasports-frontend`) and the Kotlin Android app (`chobbar-android`), both on `/api/v1/`.
+Clients: Next.js storefront (`chobbar-web`, formerly `leepasports-frontend`) and the Kotlin Android app (`chobbar-android`), both on `/api/v1/`. This repo: `chobbar-backend` (formerly `leepasports-backend`).
 
 ## Stack
 Django 5.2 · DRF · SimpleJWT (rotating refresh + blacklist) · PostgreSQL 16 (FTS, trigram, JSONB) · Redis (cache, Celery broker, Channels layer) · Celery + beat · Channels/Daphne (WebSockets) · django-unfold admin · django-extensions.

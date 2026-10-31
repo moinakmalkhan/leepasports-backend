@@ -60,7 +60,7 @@ def validate_coupon(code: str, *, items, user=None, email: str = "", shipping: D
         discount = money(eligible * coupon.value / Decimal("100"))
         if coupon.max_discount:
             discount = min(discount, money(coupon.max_discount))
-        message = f"{coupon.value:g}% off applied"
+        message = f"{coupon.value.normalize():f}% off applied"
     elif coupon.kind == Coupon.Kind.FIXED:
         discount = min(money(coupon.value), eligible)
         message = f"Rs {discount:,.0f} off applied"

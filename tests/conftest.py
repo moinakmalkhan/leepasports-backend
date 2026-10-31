@@ -9,7 +9,7 @@ from apps.catalog.models import Product, ProductVariant
 @pytest.fixture(scope="session")
 def django_db_setup(django_db_setup, django_db_blocker):
     with django_db_blocker.unblock():
-        call_command("seed_catalog", verbosity=0)
+        call_command("seed_catalog", "--no-images", verbosity=0)
 
 
 @pytest.fixture

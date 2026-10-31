@@ -11,18 +11,20 @@ import random
 from datetime import timedelta
 from decimal import Decimal
 
+from django.core.files.base import ContentFile
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils import timezone
 from django.utils.text import slugify
 
-from apps.catalog.models import Category, Collection, Color, Product, ProductVariant, Size, SizeGroup
-from apps.content.models import FAQ, Announcement, Page
+from apps.catalog.models import Category, Collection, Color, Product, ProductImage, ProductVariant, Size, SizeGroup
+from apps.content.models import FAQ, Announcement, Banner, Page
 from apps.orders.models import ShippingZone
 from apps.payments.models import BankAccount
 from apps.promotions.models import Coupon
 from apps.search.models import Synonym
 
+from . import _artwork as art
 from . import _translations as tr
 
 D = Decimal
@@ -783,6 +785,8 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--demo", action="store_true")
+        parser.add_argument("--no-images", action="store_true", help="Skip generating placeholder artwork")
+        parser.add_argument("--refresh-images", action="store_true", help="Regenerate generated artwork")
 
     @transaction.atomic
     def handle(self, *args, **options):
@@ -925,6 +929,8 @@ class Command(BaseCommand):
         )
 
         self._translations()
+        if not options["no_images"]:
+            self._artwork(refresh=options["refresh_images"])
         if options["demo"]:
             self._demo()
         self.stdout.write(
@@ -950,8 +956,13 @@ class Command(BaseCommand):
         for sku, (ur, ar) in tr.PRODUCTS.items():
             Product.objects.filter(sku=sku).update(
                 translations={
-                    "ur": {"name": ur, "short_description": tr.SHORT["ur"]},
-                    "ar": {"name": ar, "short_description": tr.SHORT["ar"]},
+                    lang: {
+                        "name": name,
+                        "short_description": tr.SHORT[lang],
+                        "description": tr.DESCRIPTION[lang],
+                        "care_instructions": tr.CARE[lang],
+                    }
+                    for lang, name in (("ur", ur), ("ar", ar))
                 }
             )
         Announcement.objects.filter(sort_order=0).update(
@@ -963,6 +974,154 @@ class Command(BaseCommand):
             ur, ar = tr.FAQ_CATEGORY.get(faq.category, (faq.category, faq.category))
             faq.translations = {"ur": {"category": ur}, "ar": {"category": ar}}
             faq.save(update_fields=["translations"])
+
+    def _artwork(self, refresh: bool = False):
+        """Studio-style placeholder images for products, categories, collections and banners."""
+        self.stdout.write("Artwork (products, categories, banners)…")
+        products = Product.objects.select_related("category").prefetch_related("variants__color")
+        for product in products:
+            if product.images.exists() and not refresh:
+                continue
+            if refresh:
+                for img in product.images.all():
+                    img.image.delete(save=False)
+                product.images.all().delete()
+            kind = art.kind_for(product.tags or [], product.category.slug)
+            colors = []
+            for v in product.variants.all():
+                if v.color_id and v.color not in colors:
+                    colors.append(v.color)
+            colors.sort(key=lambda c: c.sort_order)
+            order = 0
+            for i, color in enumerate(colors or [None]):
+                hex_ = color.hex if color else "#1c1917"
+                shots = [0, 1] if i == 0 else [0]
+                for shot in shots:
+                    image = ProductImage(
+                        product=product,
+                        color=color,
+                        alt=f"{product.name} – {color.name if color else ''}".strip(" –"),
+                        is_primary=(i == 0 and shot == 0),
+                        sort_order=order,
+                        width=800,
+                        height=1000,
+                    )
+                    image.image.save(
+                        f"{product.sku.lower()}-{color.slug if color else 'main'}-{shot}.jpg",
+                        ContentFile(art.product_image(kind, hex_, variant=shot)),
+                        save=False,
+                    )
+                    image.save()
+                    order += 1
+
+        tiles = {
+            "men": ("hoodie", "#1e2a4a"),
+            "women": ("set", "#d6c3a5"),
+            "activewear": ("shorts", "#1d4ed8"),
+            "kids": ("tee", "#dc2626"),
+            "accessories": ("cap", "#5b6b3a"),
+        }
+        for category in Category.objects.all():
+            if category.image and not refresh:
+                continue
+            first = Product.objects.filter(category__path__startswith=category.path).prefetch_related("variants__color").first()
+            kind, hex_ = tiles.get(category.slug) or (
+                (
+                    art.kind_for(first.tags or [], category.slug),
+                    next((v.color.hex for v in first.variants.all() if v.color_id), "#111111"),
+                )
+                if first
+                else ("tee", "#111111")
+            )
+            category.image.save(f"{category.slug}.jpg", ContentFile(art.tile_image(kind, hex_)), save=True)
+
+        collection_art = {
+            "new-arrivals": ("tee", "#f5f5f5"),
+            "best-sellers": ("hoodie", "#111111"),
+            "sale": ("jogger", "#dc2626"),
+            "winter-edit": ("beanie", "#6b1e2b"),
+            "gym-essentials": ("shorts", "#1d4ed8"),
+            "under-2000": ("socks", "#f5f5f5"),
+        }
+        for collection in Collection.objects.all():
+            if collection.image and not refresh:
+                continue
+            kind, hex_ = collection_art.get(collection.slug, ("tee", "#111111"))
+            collection.image.save(f"{collection.slug}.jpg", ContentFile(art.tile_image(kind, hex_)), save=True)
+
+        banners = [
+            # key, placement, eyebrow, title, subtitle, cta, url, garments, tone
+            (
+                "winter-drop",
+                "hero",
+                "New season",
+                "Built in Sialkot. Made for the streets.",
+                "Heavyweight tees, fleece hoodies and gym essentials — straight from our own factory floor.",
+                "Shop the drop",
+                "/collections/new-arrivals",
+                [("hoodie", "#e11d48"), ("tee", "#f5f5f5"), ("jogger", "#57534e")],
+                art.INK,
+            ),
+            (
+                "gym-essentials",
+                "hero",
+                "Training",
+                "Train harder in less",
+                "Compression, dri-fit tees and gym shorts that keep up with every rep.",
+                "Shop gym",
+                "/collections/gym-essentials",
+                [("compression", "#111111"), ("shorts", "#1d4ed8"), ("bra", "#e11d48")],
+                (23, 23, 33),
+            ),
+            (
+                "sale",
+                "hero",
+                "Sale",
+                "Up to 25% off",
+                "Limited sizes. Once they're gone, they're gone.",
+                "Shop sale",
+                "/collections/sale",
+                [("tracksuit", "#1e2a4a"), ("jacket", "#b7410e"), ("cap", "#111111")],
+                (41, 18, 24),
+            ),
+            (
+                "free-delivery",
+                "promo",
+                "Delivery",
+                "Free delivery over Rs 3,000",
+                "Cash on delivery anywhere in Pakistan.",
+                "Learn more",
+                "/pages/shipping-delivery",
+                [("bag", "#111111"), ("bottle", "#e11d48")],
+                art.INK,
+            ),
+            (
+                "women",
+                "promo",
+                "Women",
+                "Made to move",
+                "Leggings, co-ord sets and sports bras.",
+                "Shop women",
+                "/categories/women",
+                [("set", "#d6c3a5"), ("legging", "#111111")],
+                (38, 28, 30),
+            ),
+        ]
+        for i, (key, placement, eyebrow, title, subtitle, cta, url, garments, tone) in enumerate(banners):
+            banner = Banner.objects.filter(cta_url=url, placement=placement).first() or Banner(cta_url=url, placement=placement)
+            banner.title, banner.subtitle, banner.eyebrow, banner.cta_label = title, subtitle, eyebrow, cta
+            banner.theme, banner.sort_order, banner.is_active = "light", i, True
+            banner.translations = {
+                lang: dict(zip(("eyebrow", "title", "subtitle", "cta_label"), values, strict=True))
+                for lang, values in tr.BANNERS[key].items()
+            }
+            if refresh or not banner.image:
+                wide = (1920, 820) if placement == "hero" else (1200, 640)
+                banner.image.save(f"banner-{key}.jpg", ContentFile(art.banner_image(garments, size=wide, tone=tone)), save=False)
+                banner.mobile_image.save(
+                    f"banner-{key}-m.jpg", ContentFile(art.banner_image(garments[:2], size=(900, 1200), tone=tone)), save=False
+                )
+            banner.save()
 
     def _demo(self):
         from apps.accounts.models import Address, User

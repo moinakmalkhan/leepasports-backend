@@ -14,7 +14,8 @@ UNFOLD = {
     "SITE_HEADER": "Chobbar",
     "SITE_SUBHEADER": "chobbar.shop",
     "SITE_URL": "/",
-    "SITE_SYMBOL": "storefront",
+    "SITE_ICON": {"light": lambda request: static("brand/logo-mark.svg"), "dark": lambda request: static("brand/logo-mark.svg")},
+    "SITE_LOGO": {"light": lambda request: static("brand/logo.svg"), "dark": lambda request: static("brand/logo-dark.svg")},
     "SITE_FAVICONS": [
         {"rel": "icon", "sizes": "32x32", "type": "image/svg+xml", "href": lambda request: static("admin/chobbar-favicon.svg")}
     ],

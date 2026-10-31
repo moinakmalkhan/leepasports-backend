@@ -62,3 +62,17 @@ def test_storefront_content(api):
     assert r.status_code == 200 and r.data["announcements"] and r.data["pages"]
     assert api.get("/api/v1/content/pages/returns-exchanges/").status_code == 200
     assert len(api.get("/api/v1/content/faq/").data) >= 5
+
+
+@pytest.mark.django_db
+def test_internal_token_bypasses_throttle(api, settings):
+    from apps.core.throttling import SiteAnonRateThrottle, is_internal
+
+    settings.INTERNAL_API_TOKEN = "s3cret"
+    from rest_framework.test import APIRequestFactory
+
+    factory = APIRequestFactory()
+    assert is_internal(factory.get("/", HTTP_X_INTERNAL_TOKEN="s3cret"))
+    assert not is_internal(factory.get("/", HTTP_X_INTERNAL_TOKEN="nope"))
+    assert not is_internal(factory.get("/"))
+    assert SiteAnonRateThrottle().allow_request(factory.get("/", HTTP_X_INTERNAL_TOKEN="s3cret"), None)

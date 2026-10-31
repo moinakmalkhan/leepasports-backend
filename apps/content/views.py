@@ -10,6 +10,28 @@ from .models import FAQ, Announcement, Banner, Page
 from .serializers import AnnouncementSerializer, BannerSerializer, FAQSerializer, PageSerializer
 
 
+def _shipping_summary() -> dict:
+    """Zones for client-side delivery hints (free-delivery progress, ETA); checkout still prices server-side."""
+    from apps.orders.models import ShippingZone
+
+    zones = [
+        {
+            "name": z.name,
+            "cities": z.cities,
+            "provinces": z.provinces,
+            "is_default": z.is_default,
+            "rate": float(z.rate),
+            "free_over": float(z.free_over) if z.free_over is not None else None,
+            "cod_fee": float(z.cod_fee),
+            "min_days": z.min_days,
+            "max_days": z.max_days,
+        }
+        for z in ShippingZone.objects.filter(is_active=True).order_by("sort_order")
+    ]
+    thresholds = [z["free_over"] for z in zones if z["free_over"]]
+    return {"free_over_min": min(thresholds) if thresholds else None, "zones": zones}
+
+
 class StorefrontView(APIView):
     """Everything the shell needs in one call: banners, announcement bar, footer pages. Cached 5 min."""
 
@@ -30,6 +52,7 @@ class StorefrontView(APIView):
             data = {
                 "banners": BannerSerializer(banners, many=True, context={"request": request}).data,
                 "announcements": AnnouncementSerializer(Announcement.objects.filter(is_active=True), many=True).data,
+                "shipping": _shipping_summary(),
                 "pages": [
                     {"title": PageSerializer(p).data["title"], "slug": p.slug}
                     for p in Page.objects.filter(is_published=True, show_in_footer=True)

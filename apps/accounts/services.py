@@ -9,9 +9,16 @@ from .models import Address, NewsletterSubscriber, User
 
 
 @transaction.atomic
-def register_user(*, email, password, first_name="", last_name="", phone="", marketing_opt_in=True):
+def register_user(*, email, password, first_name="", last_name="", phone="", marketing_opt_in=True, language=""):
+    extra = {"language": language} if language in dict(settings.LANGUAGES) else {}
     user = User.objects.create_user(
-        email=email, password=password, first_name=first_name, last_name=last_name, phone=phone, marketing_opt_in=marketing_opt_in
+        email=email,
+        password=password,
+        first_name=first_name,
+        last_name=last_name,
+        phone=phone,
+        marketing_opt_in=marketing_opt_in,
+        **extra,
     )
     if marketing_opt_in:
         subscribe_newsletter(email, user=user, source="signup")
@@ -26,7 +33,7 @@ def send_verification_email(user: User):
     send_email_task.delay(
         template="verify_email",
         to=[user.email],
-        context={"name": user.full_name, "url": f"{settings.FRONTEND_URL}/verify-email?token={token}"},
+        context={"name": user.full_name, "url": f"{settings.FRONTEND_URL}/{user.language or 'en'}/verify-email?token={token}"},
     )
 
 
@@ -54,7 +61,7 @@ def request_password_reset(email: str):
     send_email_task.delay(
         template="password_reset",
         to=[user.email],
-        context={"name": user.full_name, "url": f"{settings.FRONTEND_URL}/reset-password?token={token}"},
+        context={"name": user.full_name, "url": f"{settings.FRONTEND_URL}/{user.language or 'en'}/reset-password?token={token}"},
     )
 
 
@@ -73,16 +80,20 @@ def reset_password(token: str, new_password: str) -> User:
 
 
 @transaction.atomic
-def google_login(id_token: str) -> User:
+def google_login(id_token: str, language: str = "") -> User:
     from google.auth.transport import requests as google_requests
     from google.oauth2 import id_token as google_id_token
 
-    if not settings.GOOGLE_OAUTH_CLIENT_ID:
+    # Comma-separated: the web client id (also used as the Android "server client id") plus any extra clients.
+    audiences = [c.strip() for c in settings.GOOGLE_OAUTH_CLIENT_ID.split(",") if c.strip()]
+    if not audiences:
         raise BusinessError("Google sign-in is not configured.")
     try:
-        info = google_id_token.verify_oauth2_token(id_token, google_requests.Request(), settings.GOOGLE_OAUTH_CLIENT_ID)
+        info = google_id_token.verify_oauth2_token(id_token, google_requests.Request(), audience=None)
     except ValueError as exc:
         raise BusinessError("Google sign-in failed. Please try again.") from exc
+    if info.get("aud") not in audiences:
+        raise BusinessError("Google sign-in failed.")
     if info.get("iss") not in ("accounts.google.com", "https://accounts.google.com"):
         raise BusinessError("Google sign-in failed.")
     if not info.get("email_verified"):
@@ -101,6 +112,7 @@ def google_login(id_token: str) -> User:
             auth_provider=User.AuthProvider.GOOGLE,
             google_sub=sub,
             is_email_verified=True,
+            **({"language": language} if language in dict(settings.LANGUAGES) else {}),
         )
     else:
         updates = []

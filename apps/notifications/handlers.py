@@ -89,7 +89,10 @@ def order_status_changed(order_id, from_status, to_status):
     title, body, level = STATUS_COPY.get(to_status, (to_status.replace("_", " ").title(), "", L.INFO))
     if order.user_id:
         notify_users([order.user], kind=K.ORDER, level=level, title=f"{order.number}: {title}", body=body, url=_order_url(order))
-    if to_status in ("confirmed", "shipped", "out_for_delivery", "delivered", "cancelled"):
+    # Shipping and cancellation emails always go out; the rest respect the shopper's "order updates" preference.
+    always = to_status in ("shipped", "cancelled")
+    wants = order.user is None or (order.user.notification_preferences or {}).get("orders", True)
+    if to_status in ("confirmed", "shipped", "out_for_delivery", "delivered", "cancelled") and (always or wants):
         send_email_task.delay(
             template="order_status",
             to=[order.email],

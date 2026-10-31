@@ -20,7 +20,7 @@ class SuggestView(APIView):
     throttle_classes = (SearchRateThrottle,)
 
     def get(self, request):
-        return Response(services.suggest(request.query_params.get("q", ""), user=request.user))
+        return Response(services.suggest(request.query_params.get("q", ""), user=request.user, request=request))
 
 
 class SearchView(APIView):

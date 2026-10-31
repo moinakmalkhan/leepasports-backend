@@ -67,3 +67,15 @@ def test_addresses_crud_and_default(auth):
 def test_newsletter_and_provinces(api):
     assert api.post("/api/v1/accounts/newsletter/", {"email": "fan@example.com"}, format="json").status_code == 201
     assert "Punjab" in api.get("/api/v1/accounts/provinces/").data
+
+
+def test_marketing_toggle_syncs_newsletter(auth, customer):
+    from apps.accounts.models import NewsletterSubscriber
+
+    auth.patch("/api/v1/accounts/me/", {"marketing_opt_in": True}, format="json")
+    customer.refresh_from_db()
+    assert auth.patch("/api/v1/accounts/me/", {"marketing_opt_in": False}, format="json").status_code == 200
+    sub = NewsletterSubscriber.objects.filter(email=customer.email).first()
+    assert sub is None or sub.is_active is False
+    assert auth.patch("/api/v1/accounts/me/", {"marketing_opt_in": True}, format="json").status_code == 200
+    assert NewsletterSubscriber.objects.get(email=customer.email).is_active is True

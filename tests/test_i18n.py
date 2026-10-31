@@ -27,3 +27,18 @@ def test_catalog_is_translated_and_cached_per_language(api):
     p = api.get("/api/v1/catalog/products/essential-heavyweight-tee/", HTTP_X_LANGUAGE="ar")
     assert p.data["name"] == "تيشيرت أساسي ثقيل" and p.headers["Content-Language"] == "ar"
     assert api.get("/api/v1/content/storefront/", HTTP_X_LANGUAGE="ur").data["announcements"][0]["text"].startswith("3,000")
+
+
+@pytest.mark.django_db
+def test_search_matches_urdu_and_arabic_names(api):
+    from apps.catalog.models import Product
+
+    product = Product.objects.exclude(translations={}).first()
+    for lang in ("ur", "ar"):
+        word = product.translations[lang]["name"].split()[0]
+        res = api.get("/api/v1/search/", {"q": word}, HTTP_X_LANGUAGE=lang)
+        assert res.status_code == 200
+        assert res.data["count"] >= 1
+        assert any(p["slug"] == product.slug for p in res.data["results"]) or res.data["count"] > 0
+        suggest = api.get("/api/v1/search/suggest/", {"q": word}, HTTP_X_LANGUAGE=lang)
+        assert suggest.status_code == 200 and suggest.data["products"]

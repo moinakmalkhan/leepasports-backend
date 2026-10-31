@@ -56,7 +56,9 @@ class RegisterView(APIView):
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = services.register_user(**serializer.validated_data)
+        from django.utils import translation
+
+        user = services.register_user(**serializer.validated_data, language=translation.get_language() or "")
         return Response({**build_token_pair(user), "user": UserSerializer(user).data}, status=status.HTTP_201_CREATED)
 
 
@@ -68,7 +70,9 @@ class GoogleLoginView(APIView):
     def post(self, request):
         serializer = GoogleLoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = services.google_login(serializer.validated_data["id_token"])
+        from django.utils import translation
+
+        user = services.google_login(serializer.validated_data["id_token"], language=translation.get_language() or "")
         user.last_login = timezone.now()
         user.save(update_fields=["last_login"])
         return Response({**build_token_pair(user), "user": UserSerializer(user).data})
@@ -140,6 +144,16 @@ class MeView(generics.RetrieveUpdateDestroyAPIView):
     def get_object(self):
         self.request.user.touch_last_seen()
         return self.request.user
+
+    def perform_update(self, serializer):
+        before = serializer.instance.marketing_opt_in
+        user = serializer.save()
+        # Keep the newsletter list in step with the "drops & offers" toggle.
+        if user.marketing_opt_in != before:
+            if user.marketing_opt_in:
+                services.subscribe_newsletter(user.email, user=user, source="account")
+            else:
+                services.unsubscribe_newsletter(user.email)
 
     def perform_destroy(self, instance):
         """Soft-delete: deactivate and scrub personal data (GDPR-style)."""

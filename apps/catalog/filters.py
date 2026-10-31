@@ -20,6 +20,7 @@ class ProductFilter(django_filters.FilterSet):
     tag = django_filters.CharFilter(method="filter_tag")
     brand = django_filters.CharFilter(field_name="brand", lookup_expr="iexact")
     ids = django_filters.CharFilter(method="filter_ids")
+    slugs = django_filters.CharFilter(method="filter_slugs")
 
     class Meta:
         model = Product
@@ -53,6 +54,9 @@ class ProductFilter(django_filters.FilterSet):
 
     def filter_ids(self, qs, name, value):
         return qs.filter(uid__in=[v for v in value.split(",") if v][:50])
+
+    def filter_slugs(self, qs, name, value):
+        return qs.filter(slug__in=[v for v in value.split(",") if v][:100])
 
 
 def models_f(name):

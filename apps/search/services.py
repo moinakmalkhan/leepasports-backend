@@ -25,6 +25,7 @@ from apps.core.cache import make_key
 from .models import Synonym
 
 _WS = re.compile(r"\s+")
+_LATIN = re.compile(r"^[\x00-\x7f]*$")
 
 
 def normalize(q: str) -> str:
@@ -76,6 +77,8 @@ def product_search_queryset(q: str, user=None):
     q = normalize(q)
     if not q:
         return Product.objects.for_listing().order_by("-is_featured", "-sales_count")
+    if not _LATIN.match(q):
+        return _translated_search_queryset(q)
     ts = SearchQuery(expand(q), search_type="websearch", config="english")
     return (
         Product.objects.for_listing()
@@ -90,7 +93,23 @@ def product_search_queryset(q: str, user=None):
     )
 
 
-def suggest(q: str, user=None, limit: int = 6) -> dict:
+def _translated_search_queryset(q: str):
+    """Urdu / Arabic queries: match the translated name, description and category name stored in JSONB."""
+    terms = [t for t in q.split() if t]
+    cond = Q()
+    for lang in ("ur", "ar"):
+        match = Q()
+        for term in terms:
+            match &= (
+                Q(**{f"translations__{lang}__name__icontains": term})
+                | Q(**{f"translations__{lang}__short_description__icontains": term})
+                | Q(**{f"category__translations__{lang}__name__icontains": term})
+            )
+        cond |= match
+    return Product.objects.for_listing().filter(cond).order_by("-is_featured", "-sales_count")
+
+
+def suggest(q: str, user=None, limit: int = 6, request=None) -> dict:
     q = normalize(q)
     if len(q) < 2:
         return {"products": [], "categories": [], "collections": [], "query": q}
@@ -103,20 +122,30 @@ def suggest(q: str, user=None, limit: int = 6) -> dict:
     from apps.catalog.serializers import ProductCardSerializer
 
     products = list(product_search_queryset(q, user)[:limit])
+    name_match = (
+        Q(name__icontains=q) | Q(similarity__gt=0.3)
+        if _LATIN.match(q)
+        else Q(translations__ur__name__icontains=q) | Q(translations__ar__name__icontains=q)
+    )
     categories = list(
         Category.objects.active()
         .annotate(similarity=TrigramSimilarity("name", q))
-        .filter(Q(name__icontains=q) | Q(similarity__gt=0.3))
+        .filter(name_match)
         .annotate(n=Count("products", filter=Q(products__is_active=True)))
         .filter(n__gt=0)
         .order_by("-similarity")[:3]
     )
-    collections = list(Collection.objects.filter(is_active=True, name__icontains=q)[:2])
+    collection_match = (
+        Q(name__icontains=q)
+        if _LATIN.match(q)
+        else Q(translations__ur__name__icontains=q) | Q(translations__ar__name__icontains=q)
+    )
+    collections = list(Collection.objects.filter(collection_match, is_active=True)[:2])
     from apps.core.i18n import translate
 
     data = {
         "query": q,
-        "products": ProductCardSerializer(products, many=True).data,
+        "products": ProductCardSerializer(products, many=True, context={"request": request}).data,
         "categories": [{"name": translate(c, "name"), "slug": c.slug, "product_count": c.n} for c in categories],
         "collections": [{"name": translate(c, "name"), "slug": c.slug} for c in collections],
     }

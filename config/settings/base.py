@@ -26,6 +26,7 @@ env = environ.Env(
     EMAIL_BACKEND=(str, "django.core.mail.backends.console.EmailBackend"),
     DEFAULT_FROM_EMAIL=(str, "Chobbar <no-reply@chobbar.shop>"),
     GOOGLE_OAUTH_CLIENT_ID=(str, ""),
+    INTERNAL_API_TOKEN=(str, ""),
     SITE_NAME=(str, "Chobbar"),
     ADMIN_NOTIFICATION_EMAILS=(list, []),
     JWT_ACCESS_MINUTES=(int, 15),
@@ -208,6 +209,8 @@ AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 GOOGLE_OAUTH_CLIENT_ID = env("GOOGLE_OAUTH_CLIENT_ID")
+# Shared secret the Next.js server sends on server-side requests (exempts SSR traffic from per-IP throttling).
+INTERNAL_API_TOKEN = env("INTERNAL_API_TOKEN")
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ("rest_framework_simplejwt.authentication.JWTAuthentication",),
@@ -226,8 +229,8 @@ REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "EXCEPTION_HANDLER": "apps.core.exceptions.api_exception_handler",
     "DEFAULT_THROTTLE_CLASSES": (
-        "rest_framework.throttling.AnonRateThrottle",
-        "rest_framework.throttling.UserRateThrottle",
+        "apps.core.throttling.SiteAnonRateThrottle",
+        "apps.core.throttling.SiteUserRateThrottle",
     ),
     "DEFAULT_THROTTLE_RATES": {
         "anon": "120/min",
