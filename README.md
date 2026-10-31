@@ -29,27 +29,46 @@ request quotes, check out with PO numbers / net terms, and track orders end to e
 
 `/admin/` (set `ADMIN_URL` in production). Sign in with the staff demo user. The dashboard shows revenue and order charts, work queues (approvals, payments to confirm, production, late orders), quotes awaiting a reply and recent activity. Every list has saved filters, bulk actions and CSV export; order and quote detail pages carry workflow buttons that notify customers.
 
-## Quick start
+## Quick start (Docker, recommended for local development)
+
+Requires Docker Desktop (or Docker Engine + Compose v2) and GNU make.
 
 ```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -r requirements-dev.txt
-cp .env.example .env            # set SECRET_KEY / JWT_SIGNING_KEY
-createdb leepasports            # needs PostgreSQL 16 + redis running
-python manage.py migrate
-python manage.py seed_catalog --demo
-python manage.py runserver
+cp .env.example .env      # review values; every variable is documented in the file
+make up                   # builds the image, starts Postgres, Redis, Mailpit, API, Celery worker + beat
+make seed                 # demo catalog, fabrics, company and users (first time only)
 ```
 
-Or with Docker: `docker compose up --build` (API on :8000, Postgres, Redis, Celery worker + beat).
+| URL | What |
+| --- | --- |
+| http://localhost:8000/api/docs/ | Interactive API docs |
+| http://localhost:8000/admin/ | Operations admin |
+| http://localhost:8025 | Mailpit — every email the app sends |
 
-Demo logins after `seed_catalog --demo`:
+Everyday targets (`make help` lists them all):
 
-| Role | Email | Password |
-| --- | --- | --- |
-| Staff / admin | admin@leepasports.com | Admin!Leepa2026 |
-| Company owner | buyer@riversidefc.com | Buyer!Leepa2026 |
-| Company buyer (limit 2,000) | coach@riversidefc.com | Coach!Leepa2026 |
+| Target | Does |
+| --- | --- |
+| `make up` / `make down` / `make restart` | start / stop / restart the stack (data is kept) |
+| `make server` | infra + worker in the background, API in the foreground with logs (Ctrl+C to stop) |
+| `make logs` (`make logs s=worker`) | follow logs |
+| `make ps` | container status |
+| `make migrate`, `make makemigrations a=app`, `make seed`, `make superuser` | Django management, run inside the api container |
+| `make shell`, `make dbshell`, `make psql`, `make redis-cli`, `make exec` | shells |
+| `make test`, `make lint`, `make format`, `make check` | quality gates (also run inside the container) |
+| `make manage cmd="show_urls"` | any management command |
+| `make backup` / `make restore f=backups/x.sql.gz` | database dumps |
+| `make clean` | stop and **delete volumes** (database, redis, media) |
+
+The API container runs `runserver` with the code bind-mounted, so edits reload instantly and WebSockets work (Daphne). Migrations run automatically on start; set `SEED_ON_START=1` in `.env` to seed on first boot.
+
+### Without Docker for the app
+```bash
+make venv && source .venv/bin/activate
+make infra                # just Postgres, Redis and Mailpit in Docker
+make migrate && make seed
+make server-local         # runserver_plus on :8000; `make worker-local` / `make beat-local` in other terminals
+```
 
 ## Project layout
 

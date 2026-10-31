@@ -8,3 +8,4 @@ staticfiles/
 .ruff_cache/
 *.log
 .DS_Store
+backups/

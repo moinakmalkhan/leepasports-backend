@@ -3,3 +3,5 @@ pytest>=8
 pytest-django>=4.9
 factory-boy>=3.3
 ruff>=0.9
+pytest-asyncio>=0.24
+PyJWT>=2.9
