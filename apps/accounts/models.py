@@ -102,7 +102,7 @@ class Company(UUIDModel):
         NET_60 = "net_60", "Net 60"
 
     name = models.CharField(max_length=160)
-    slug = AutoSlugField(populate_from="name", max_length=170, unique=True)
+    slug = AutoSlugField(populate_from="name", overwrite_on_add=False, max_length=170, unique=True)
     legal_name = models.CharField(max_length=200, blank=True)
     business_type = models.CharField(max_length=20, choices=BusinessType.choices, default=BusinessType.CLUB)
     tax_id = models.CharField(max_length=64, blank=True)

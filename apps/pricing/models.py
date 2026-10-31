@@ -10,7 +10,7 @@ class CustomerGroup(TimeStampedModel):
     """Tiered customer segments (Retail club, Distributor, Key account...)."""
 
     name = models.CharField(max_length=80, unique=True)
-    slug = AutoSlugField(populate_from="name", max_length=80, unique=True)
+    slug = AutoSlugField(populate_from="name", overwrite_on_add=False, max_length=80, unique=True)
     discount_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     description = models.CharField(max_length=200, blank=True)
     is_default = models.BooleanField(default=False)
