@@ -218,6 +218,7 @@ def cancel(order: Order, *, by, reason: str = "") -> Order:
     return transition(order, Order.Status.CANCELLED, by=by, note=reason or "Cancelled by customer", cancel_reason=reason[:300])
 
 
+@transaction.atomic
 def reorder(order: Order, request) -> int:
     cart = cart_services.get_or_create_cart(request)
     added = 0
@@ -241,6 +242,7 @@ def reorder(order: Order, request) -> int:
     return added
 
 
+@transaction.atomic
 def record_payment(order: Order, amount: Decimal):
     """Called by payments when money is confirmed; updates status & payment flags."""
     order = Order.objects.select_for_update().get(pk=order.pk)

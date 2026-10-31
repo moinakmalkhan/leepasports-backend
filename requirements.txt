@@ -1,4 +1,5 @@
 Django>=5.2,<5.3
+django-unfold>=0.60
 djangorestframework>=3.16
 djangorestframework-simplejwt>=5.5
 django-filter>=25.1

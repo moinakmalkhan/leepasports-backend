@@ -45,6 +45,7 @@ def send_verification_email(user: User):
     )
 
 
+@transaction.atomic
 def verify_email(token: str) -> User:
     data = tokens.read_token(token, tokens.VERIFY_SALT, tokens.VERIFY_MAX_AGE)
     if not data:
@@ -72,6 +73,7 @@ def request_password_reset(email: str):
     )
 
 
+@transaction.atomic
 def reset_password(token: str, new_password: str) -> User:
     data = tokens.read_token(token, tokens.RESET_SALT, tokens.RESET_MAX_AGE)
     if not data:
@@ -85,6 +87,7 @@ def reset_password(token: str, new_password: str) -> User:
     return user
 
 
+@transaction.atomic
 def google_login(id_token: str) -> User:
     """Verify a Google ID token and return (or create) the matching user."""
     from google.auth.transport import requests as google_requests

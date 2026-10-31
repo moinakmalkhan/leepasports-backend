@@ -183,11 +183,12 @@ def accept(quote: Quote, *, request, shipping_address_uid, payment_method, po_nu
     return order
 
 
+@transaction.atomic
 def decline(quote: Quote, *, by, reason: str = "") -> Quote:
     if quote.status not in (Quote.Status.SUBMITTED, Quote.Status.UNDER_REVIEW, Quote.Status.QUOTED):
         raise BusinessError("This quote cannot be declined now.")
     quote.status = Quote.Status.DECLINED
     quote.internal_notes = (quote.internal_notes + f"\nDeclined by {by}: {reason}").strip()
     quote.save(update_fields=["status", "internal_notes", "updated_at"])
-    emit("quote.declined", quote_id=quote.pk)
+    after_commit(lambda: emit("quote.declined", quote_id=quote.pk))
     return quote

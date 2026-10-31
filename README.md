@@ -22,7 +22,12 @@ request quotes, check out with PO numbers / net terms, and track orders end to e
 | Notifications | In-app notifications (cursor paginated), realtime push over WebSocket, HTML emails for every important event, staff alerts |
 | Search | Autocomplete with products + categories + fabrics, typo tolerance (trigram), synonyms, ranking with popularity and per-company boosts, trending queries, recommendations (frequently ordered together, personalised, recently viewed) |
 | Chat | Company ↔ sales conversations (optionally pinned to an order/quote), WebSocket consumer with JWT auth, typing & read receipts, REST fallback with cursor pagination |
+| Admin panel | django-unfold based operations panel: branded sidebar with live badges, KPI dashboard (revenue, orders, queues, charts), reports with CSV export, order workflow actions (confirm → production → QC → ship with tracking → deliver → complete, cancel), payment confirmation, quote publishing, company terms dialog, fabric bulk re-pricing, product duplicate/feature/publish, picking-list export |
 | Platform | Consistent error envelope, consistent pagination, throttling, request ids, Redis caching with O(1) namespace invalidation, OpenAPI docs at `/api/docs/` |
+
+## Admin panel
+
+`/admin/` (set `ADMIN_URL` in production). Sign in with the staff demo user. The dashboard shows revenue and order charts, work queues (approvals, payments to confirm, production, late orders), quotes awaiting a reply and recent activity. Every list has saved filters, bulk actions and CSV export; order and quote detail pages carry workflow buttons that notify customers.
 
 ## Quick start
 

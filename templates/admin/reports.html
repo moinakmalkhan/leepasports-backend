@@ -1,0 +1,30 @@
+{% extends 'admin/base.html' %}
+{% load i18n unfold %}
+{% block title %}Reports | {{ site_title }}{% endblock %}
+{% block branding %}{% include "unfold/helpers/site_branding.html" %}{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-6">
+  {% component "unfold/components/card.html" with title="Sales report" title_icon="monitoring" description="Pieces, orders and revenue for a period, grouped the way you need." %}
+    <form method="get" class="flex flex-col md:flex-row md:items-end gap-4">
+      {% for field in form %}
+        <div class="flex flex-col gap-1">
+          <label class="text-xs font-medium text-subtle">{{ field.label }}</label>
+          {{ field }}
+        </div>
+      {% endfor %}
+      <div class="flex gap-2">
+        {% component "unfold/components/button.html" with submit=1 variant="primary" %}Run report{% endcomponent %}
+        {% component "unfold/components/button.html" with href="?start="|add:params.start|date:"Y-m-d"|add:"&end="|add:params.end|date:"Y-m-d"|add:"&group_by="|add:params.group_by|add:"&export=csv" %}Export CSV{% endcomponent %}
+      </div>
+    </form>
+  {% endcomponent %}
+  <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+    {% component "unfold/components/card.html" %}<p class="text-xs uppercase tracking-wide text-subtle">Revenue</p><p class="text-2xl font-semibold mt-1">{{ totals.rev|floatformat:2 }}</p>{% endcomponent %}
+    {% component "unfold/components/card.html" %}<p class="text-xs uppercase tracking-wide text-subtle">Pieces</p><p class="text-2xl font-semibold mt-1">{{ totals.pcs }}</p>{% endcomponent %}
+    {% component "unfold/components/card.html" %}<p class="text-xs uppercase tracking-wide text-subtle">Orders</p><p class="text-2xl font-semibold mt-1">{{ totals.orders }}</p>{% endcomponent %}
+  </div>
+  {% component "unfold/components/card.html" with title="Results" %}
+    {% component "unfold/components/table.html" with table=table card_included=1 striped=1 %}{% endcomponent %}
+  {% endcomponent %}
+</div>
+{% endblock %}

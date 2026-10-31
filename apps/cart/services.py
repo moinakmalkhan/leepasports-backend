@@ -112,6 +112,7 @@ def update_item(item: CartItem, company, **changes) -> CartItem:
     return item
 
 
+@transaction.atomic
 def reprice_cart(cart: Cart, company) -> dict:
     """Re-run pricing for every line (prices/rates may have moved) and return totals."""
     items = list(cart.items.select_related("product__base_fabric", "product__category", "fabric"))

@@ -1,0 +1,108 @@
+{% extends 'admin/base.html' %}
+{% load i18n unfold %}
+
+{% block title %}Dashboard | {{ site_title }}{% endblock %}
+{% block branding %}{% include "unfold/helpers/site_branding.html" %}{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-6">
+
+  {# ---- KPI cards ---- #}
+  <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6 gap-4">
+    {% for kpi in kpis %}
+      {% component "unfold/components/card.html" with href=kpi.href %}
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <p class="text-xs font-medium uppercase tracking-wide text-subtle truncate">{{ kpi.title }}</p>
+            <p class="mt-1 text-2xl font-semibold tracking-tight text-important {% if kpi.tone == 'warning' and kpi.value %}text-primary-600 dark:text-primary-400{% endif %}">{{ kpi.value }}</p>
+          </div>
+          <span class="material-symbols-outlined text-base-300 dark:text-base-600">{{ kpi.icon }}</span>
+        </div>
+        <div class="mt-3 flex items-center gap-2 text-xs text-subtle">
+          {% if kpi.change is not None %}
+            <span class="inline-flex items-center gap-0.5 font-medium {% if kpi.change >= 0 %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}">
+              <span class="material-symbols-outlined text-sm!">{% if kpi.change >= 0 %}trending_up{% else %}trending_down{% endif %}</span>{{ kpi.change }}%
+            </span><span>vs prev. 30d</span>
+          {% else %}<span>{{ kpi.footer }}</span>{% endif %}
+        </div>
+      {% endcomponent %}
+    {% endfor %}
+  </div>
+
+  {# ---- Charts + work queue ---- #}
+  <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+    <div class="xl:col-span-2 flex flex-col gap-6">
+      {% component "unfold/components/card.html" with title="Revenue — last 30 days" title_icon="payments" %}
+        {% component "unfold/components/chart/line.html" with data=revenue_chart height=240 %}{% endcomponent %}
+      {% endcomponent %}
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {% component "unfold/components/card.html" with title="Orders per day" title_icon="shopping_bag" %}
+          {% component "unfold/components/chart/bar.html" with data=orders_chart height=200 %}{% endcomponent %}
+        {% endcomponent %}
+        {% component "unfold/components/card.html" with title="Pieces by category (30d)" title_icon="category" %}
+          {% component "unfold/components/chart/bar.html" with data=category_chart height=200 %}{% endcomponent %}
+        {% endcomponent %}
+      </div>
+    </div>
+
+    <div class="flex flex-col gap-6">
+      {% component "unfold/components/card.html" with title="Work queue" title_icon="checklist" description="Orders that need an action" %}
+        <ul class="divide-y divide-base-200 dark:divide-base-800 -my-2">
+          {% for q in queues %}
+            <li><a href="{{ q.href }}" class="flex items-center justify-between gap-3 py-2.5 hover:text-primary-600 dark:hover:text-primary-400">
+              <span class="text-sm">{{ q.label }}</span>
+              <span class="text-sm font-semibold tabular-nums {% if q.count %}text-important{% else %}text-subtle{% endif %}">{{ q.count }}</span>
+            </a></li>
+          {% endfor %}
+        </ul>
+      {% endcomponent %}
+
+      {% component "unfold/components/card.html" with title="Quick actions" title_icon="bolt" %}
+        <div class="grid grid-cols-2 gap-2">
+          {% for l in quick_links %}
+            <a href="{{ l.href }}" class="flex items-center gap-2 rounded-default border border-base-200 px-3 py-2 text-sm hover:border-primary-400 hover:text-primary-600 dark:border-base-700 dark:hover:border-primary-500">
+              <span class="material-symbols-outlined text-base!">{{ l.icon }}</span>{{ l.title }}
+            </a>
+          {% endfor %}
+        </div>
+      {% endcomponent %}
+
+      {% if status_mix %}
+      {% component "unfold/components/card.html" with title="Open orders by status" title_icon="donut_small" %}
+        <ul class="flex flex-col gap-2">
+          {% for s in status_mix %}
+            <li class="flex items-center justify-between text-sm"><span>{{ s.label }}</span><span class="font-semibold tabular-nums">{{ s.n }}</span></li>
+          {% endfor %}
+        </ul>
+      {% endcomponent %}
+      {% endif %}
+    </div>
+  </div>
+
+  {# ---- Queues as tables ---- #}
+  <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+    {% component "unfold/components/card.html" with title="Quotes awaiting a reply" title_icon="request_quote" %}
+      {% component "unfold/components/table.html" with table=pending_quotes card_included=1 striped=1 %}{% endcomponent %}
+    {% endcomponent %}
+    {% component "unfold/components/card.html" with title="Payment proofs to confirm" title_icon="fact_check" %}
+      {% component "unfold/components/table.html" with table=payments card_included=1 striped=1 %}{% endcomponent %}
+    {% endcomponent %}
+  </div>
+
+  {% component "unfold/components/card.html" with title="Recent orders" title_icon="history" %}
+    {% component "unfold/components/table.html" with table=recent_orders card_included=1 striped=1 %}{% endcomponent %}
+  {% endcomponent %}
+
+  <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+    {% component "unfold/components/card.html" with title="Top products (30d)" title_icon="apparel" %}
+      {% component "unfold/components/table.html" with table=top_products card_included=1 %}{% endcomponent %}
+    {% endcomponent %}
+    {% component "unfold/components/card.html" with title="Top companies (30d)" title_icon="domain" %}
+      {% component "unfold/components/table.html" with table=top_companies card_included=1 %}{% endcomponent %}
+    {% endcomponent %}
+    {% component "unfold/components/card.html" with title="Low stock (stocked items)" title_icon="inventory_2" %}
+      {% component "unfold/components/table.html" with table=low_stock card_included=1 %}{% endcomponent %}
+    {% endcomponent %}
+  </div>
+</div>
+{% endblock %}

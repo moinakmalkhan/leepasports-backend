@@ -10,6 +10,8 @@ from pathlib import Path
 
 import environ
 
+from config.unfold import UNFOLD  # noqa: F401
+
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 env = environ.Env(
@@ -45,6 +47,9 @@ DEFAULT_CURRENCY = env("DEFAULT_CURRENCY")
 # ---------------------------------------------------------------------------
 DJANGO_APPS = [
     "daphne",
+    "unfold",
+    "unfold.contrib.filters",
+    "unfold.contrib.forms",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",

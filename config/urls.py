@@ -21,7 +21,7 @@ api_v1 = [
 ]
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
+    path(getattr(settings, "ADMIN_URL", "admin/"), admin.site.urls),
     path("api/v1/", include((api_v1, "v1"))),
     path("api/health/", HealthView.as_view(), name="health"),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
