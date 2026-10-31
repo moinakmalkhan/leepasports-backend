@@ -41,6 +41,7 @@ SITE_NAME = env("SITE_NAME")
 FRONTEND_URL = env("FRONTEND_URL").rstrip("/")
 ADMIN_NOTIFICATION_EMAILS = env("ADMIN_NOTIFICATION_EMAILS")
 DEFAULT_CURRENCY = env("DEFAULT_CURRENCY")
+ADMIN_URL = env("ADMIN_URL", default="admin/")
 
 # ---------------------------------------------------------------------------
 # Applications

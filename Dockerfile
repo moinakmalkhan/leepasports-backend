@@ -1,11 +1,19 @@
-FROM python:3.13-slim AS base
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+# syntax=docker/dockerfile:1.7
+# Local development image for the Leepa Sports API.
+# Code is bind-mounted by docker-compose, so edits reload without rebuilding;
+# rebuild only when requirements change (`make build`).
+# No apt packages needed: psycopg[binary] ships libpq, healthchecks use Python.
+FROM python:3.13-slim
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DJANGO_SETTINGS_MODULE=config.settings.development
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends libpq5 curl && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-RUN DJANGO_SETTINGS_MODULE=config.settings.production SECRET_KEY=build python manage.py collectstatic --noinput
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install -r requirements-dev.txt
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint
+RUN chmod +x /usr/local/bin/entrypoint
 EXPOSE 8000
-# ASGI (HTTP + WebSockets). For HTTP-only scaling you can also run gunicorn config.wsgi.
-CMD ["daphne", "-b", "0.0.0.0", "-p", "8000", "config.asgi:application"]
+ENTRYPOINT ["entrypoint"]
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]

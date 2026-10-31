@@ -8,20 +8,19 @@ Django 5.2 · DRF · SimpleJWT (rotating refresh + blacklist) · PostgreSQL 16 (
 
 ## Run locally
 ```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -r requirements-dev.txt
-cp .env.example .env            # Postgres + Redis must be running; set SECRET_KEY/JWT_SIGNING_KEY
-createdb leepasports && python manage.py migrate
-python manage.py seed_catalog --demo      # fabrics, categories, products, demo users
-python manage.py runserver_plus 0.0.0.0:8000   # or: daphne config.asgi:application (needed for WebSockets)
-celery -A config worker -l info           # optional in dev: CELERY_TASK_ALWAYS_EAGER=True runs tasks inline
+cp .env.example .env     # every variable documented there (django-environ reads .env)
+make up                  # Docker: Postgres, Redis, Mailpit, API (:8000), Celery worker + beat
+make seed                # demo catalog + users (first time)
+make server              # alternative: API in the foreground with logs
 ```
-Admin: http://localhost:8000/admin/ (admin@leepasports.com / Admin!Leepa2026). API docs: /api/docs/.
+Admin: http://localhost:8000/admin/ (admin@leepasports.com / Admin!Leepa2026). API docs: /api/docs/. Emails: http://localhost:8025.
 Demo buyer: buyer@riversidefc.com / Buyer!Leepa2026 (company owner), coach@riversidefc.com / Coach!Leepa2026 (buyer with a 2,000 spend limit).
+Without Docker for the app: `make venv`, `make infra`, `make server-local`.
 
 ## Commands
-- `make test` / `python -m pytest -q` — API tests against Postgres (35 tests; use `--create-db` after model changes)
-- `make lint` — ruff check + format (line length 130)
+- `make test` — API tests against Postgres (runs inside the api container when the stack is up, else in your venv); `make test-fast` reuses the test DB
+- `make lint` / `make format` — ruff check + format (line length 130)
+- `make logs`, `make ps`, `make shell`, `make psql`, `make exec`, `make manage cmd="..."` — see `make help`
 - `python manage.py shell_plus` — IPython with models + services preloaded (prints SQL in dev)
 - `python manage.py show_urls`, `runscript <name>` (scripts/), `graph_models`
 - `python manage.py makemigrations --check --dry-run` before committing model changes

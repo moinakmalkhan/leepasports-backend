@@ -1,52 +1,101 @@
+# Local development stack — drive it with the Makefile (`make up`, `make server`, `make logs` …).
+# Settings come from `.env` (django-environ). Compose only overrides the host names that
+# differ inside the Docker network, so the same `.env` also works for a local virtualenv.
+name: leepasports
+
+x-app: &app
+  build: .
+  image: leepasports-api:dev
+  env_file: .env
+  environment: &app-env
+    DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-leepasports}
+    REDIS_URL: redis://redis:6379/0
+    CELERY_BROKER_URL: redis://redis:6379/1
+    CHANNEL_LAYER_URL: redis://redis:6379/2
+    CELERY_TASK_ALWAYS_EAGER: "False"   # a real worker container handles tasks
+    EMAIL_BACKEND: django.core.mail.backends.smtp.EmailBackend
+    EMAIL_HOST: mailpit
+    EMAIL_PORT: "1025"
+    EMAIL_USE_TLS: "False"
+  volumes:
+    - .:/app
+    - media:/app/media
+  depends_on:
+    db: { condition: service_healthy }
+    redis: { condition: service_healthy }
+
 services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: leepasports
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    volumes: ["pgdata:/var/lib/postgresql/data"]
-    ports: ["5432:5432"]
-    healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres"], interval: 5s, retries: 10 }
+      POSTGRES_DB: ${POSTGRES_DB:-leepasports}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports: ["${POSTGRES_PORT:-5432}:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-leepasports}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["${REDIS_PORT:-6379}:6379"]
+    volumes: ["redisdata:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "${MAILPIT_PORT:-8025}:8025"   # web UI for every email the app sends
+      - "1025:1025"
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+
   api:
-    build: .
-    env_file: .env
+    <<: *app
+    container_name: leepasports-api
     environment:
-      DJANGO_SETTINGS_MODULE: config.settings.production
-      DATABASE_URL: postgres://postgres:postgres@db:5432/leepasports
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CHANNEL_LAYER_URL: redis://redis:6379/2
-      SECURE_SSL_REDIRECT: "False"
-    command: sh -c "python manage.py migrate && daphne -b 0.0.0.0 -p 8000 config.asgi:application"
-    ports: ["8000:8000"]
-    volumes: ["media:/app/media"]
-    depends_on: { db: { condition: service_healthy }, redis: { condition: service_started } }
+      <<: *app-env
+      MIGRATE_ON_START: "1"
+      SEED_ON_START: "${SEED_ON_START:-0}"
+    # runserver autoreloads and serves WebSockets (daphne is first in INSTALLED_APPS)
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+    ports: ["${API_PORT:-8000}:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health/', timeout=4).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # worker/beat wait for the api to be healthy so migrations have run first.
   worker:
-    build: .
-    env_file: .env
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.production
-      DATABASE_URL: postgres://postgres:postgres@db:5432/leepasports
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CHANNEL_LAYER_URL: redis://redis:6379/2
-    command: celery -A config worker -l info --concurrency 2
-    volumes: ["media:/app/media"]
-    depends_on: [db, redis]
+    <<: *app
+    container_name: leepasports-worker
+    command: ["celery", "-A", "config", "worker", "-l", "info", "--concurrency", "2"]
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+
   beat:
-    build: .
-    env_file: .env
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.production
-      DATABASE_URL: postgres://postgres:postgres@db:5432/leepasports
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-    command: celery -A config beat -l info
-    depends_on: [db, redis]
+    <<: *app
+    container_name: leepasports-beat
+    command: ["celery", "-A", "config", "beat", "-l", "info"]
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  redisdata:
   media:
