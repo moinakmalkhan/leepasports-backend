@@ -303,7 +303,10 @@ CORS_ALLOW_HEADERS = [
     "content-type",
     "x-request-id",
     "x-company-id",
+    "x-cart-token",
+    "x-session-key",
 ]
+CORS_EXPOSE_HEADERS = ["x-request-id"]
 CSRF_TRUSTED_ORIGINS = env("CSRF_TRUSTED_ORIGINS")
 X_FRAME_OPTIONS = "DENY"
 SECURE_CONTENT_TYPE_NOSNIFF = True
