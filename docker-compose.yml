@@ -1,15 +1,15 @@
 # Local development stack — drive it with the Makefile (`make up`, `make server`, `make logs` …).
 # Settings come from `.env` (django-environ). Compose only overrides the host names that
 # differ inside the Docker network, so the same `.env` also works for a local virtualenv.
-name: leepasports
+name: chobbar
 
 # Only `api` builds the image; worker and beat reuse the same tag (building it
 # three times in parallel makes `up --build` fail with "image already exists").
 x-app: &app
-  image: leepasports-api:dev
+  image: chobbar-api:dev
   env_file: .env
   environment: &app-env
-    DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-leepasports}
+    DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-chobbar}
     REDIS_URL: redis://redis:6379/0
     CELERY_BROKER_URL: redis://redis:6379/1
     CHANNEL_LAYER_URL: redis://redis:6379/2
@@ -21,7 +21,7 @@ x-app: &app
   volumes:
     - .:/app
     - media:/app/media
-  networks: [leepanet]
+  networks: [chobbarnet]
   depends_on:
     db: { condition: service_healthy }
     redis: { condition: service_healthy }
@@ -30,16 +30,16 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-leepasports}
+      POSTGRES_DB: ${POSTGRES_DB:-chobbar}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports: ["${POSTGRES_PORT:-5432}:5432"]
-    networks: [leepanet]
+    networks: [chobbarnet]
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-leepasports}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-chobbar}"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -48,7 +48,7 @@ services:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports: ["${REDIS_PORT:-6379}:6379"]
-    networks: [leepanet]
+    networks: [chobbarnet]
     volumes: ["redisdata:/data"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -61,7 +61,7 @@ services:
     ports:
       - "${MAILPIT_PORT:-8025}:8025"   # web UI for every email the app sends
       - "1025:1025"
-    networks: [leepanet]
+    networks: [chobbarnet]
     environment:
       MP_SMTP_AUTH_ACCEPT_ANY: 1
       MP_SMTP_AUTH_ALLOW_INSECURE: 1
@@ -70,7 +70,7 @@ services:
     <<: *app
     build: .
     pull_policy: never
-    container_name: leepasports-api
+    container_name: chobbar-api
     environment:
       <<: *app-env
       MIGRATE_ON_START: "1"
@@ -88,7 +88,7 @@ services:
   # worker/beat wait for the api to be healthy so migrations have run first.
   worker:
     <<: *app
-    container_name: leepasports-worker
+    container_name: chobbar-worker
     command: ["celery", "-A", "config", "worker", "-l", "info", "--concurrency", "2"]
     pull_policy: never
     depends_on:
@@ -97,7 +97,7 @@ services:
 
   beat:
     <<: *app
-    container_name: leepasports-beat
+    container_name: chobbar-beat
     command: ["celery", "-A", "config", "beat", "-l", "info"]
     pull_policy: never
     depends_on:
@@ -112,6 +112,6 @@ volumes:
 # Dedicated bridge network: containers resolve each other by service name
 # (db, redis, mailpit, api) and are isolated from other Compose projects.
 networks:
-  leepanet:
-    name: leepasports_net
+  chobbarnet:
+    name: chobbar_net
     driver: bridge

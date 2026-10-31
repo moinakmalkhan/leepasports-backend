@@ -1,4 +1,4 @@
-# Leepa Sports API — developer commands
+# Chobbar Shop API — developer commands
 #
 #   make up        → build images and start the whole stack (Postgres, Redis, Mailpit, API, Celery worker + beat)
 #   make server    → start infra, then run the API in the foreground (logs here, Ctrl+C to stop)
@@ -40,7 +40,7 @@ build: ## Build the dev image
 up: .env ## Start everything in the background (db, redis, mailpit, api, worker, beat)
 	$(COMPOSE) up -d --build
 	@echo; echo "  API      http://localhost:8000/api/docs/"; echo "  Admin    http://localhost:8000/admin/"; echo "  Mailpit  http://localhost:8025"; echo
-	@echo "  First time? run: make seed   (demo catalog + users)"; echo
+	@echo "  First time? run: make seed   (demo catalog + accounts)"; echo
 server: .env ## Build, start infra + worker in background, run the API in the foreground
 	$(COMPOSE) build api
 	$(COMPOSE) up -d db redis mailpit
@@ -63,7 +63,7 @@ ps: ## Container status
 	$(COMPOSE) ps
 
 ##@ Django (inside the container when up, otherwise local venv)
-.PHONY: migrate makemigrations seed superuser shell dbshell manage urls graph reprice collectstatic
+.PHONY: migrate makemigrations seed superuser shell dbshell manage urls graph low-stock collectstatic
 migrate: ## Apply migrations
 	$(RUNT) $(MANAGE) migrate
 makemigrations: ## Create migrations (make makemigrations a=accounts)
@@ -82,8 +82,8 @@ urls: ## List all URL routes
 	$(RUNT) $(MANAGE) show_urls
 graph: ## ER diagram → docs/models.png (needs graphviz)
 	$(RUNT) $(MANAGE) graph_models -o docs/models.png
-reprice: ## Recompute every product price from fabric rates
-	$(RUNT) $(MANAGE) runscript reprice_catalog
+low-stock: ## Print low-stock variants
+	$(RUNT) $(MANAGE) runscript low_stock_report
 collectstatic: ## Collect static files
 	$(RUNT) $(MANAGE) collectstatic --noinput
 
@@ -117,11 +117,11 @@ beat-local: ## Celery beat from your venv
 exec: ## Bash inside the api container
 	$(COMPOSE) exec api bash
 psql: ## psql on the dev database
-	$(COMPOSE) exec db psql -U postgres -d leepasports
+	$(COMPOSE) exec db psql -U postgres -d chobbar
 redis-cli: ## redis-cli on the dev redis
 	$(COMPOSE) exec redis redis-cli
 backup: ## Dump the database to backups/<timestamp>.sql.gz
-	@mkdir -p backups && $(COMPOSE) exec -T db pg_dump -U postgres leepasports | gzip > backups/$$(date +%Y%m%d-%H%M%S).sql.gz && ls -1t backups | head -1
+	@mkdir -p backups && $(COMPOSE) exec -T db pg_dump -U postgres chobbar | gzip > backups/$$(date +%Y%m%d-%H%M%S).sql.gz && ls -1t backups | head -1
 restore: ## Restore: make restore f=backups/xxx.sql.gz
 	@test -n "$(f)" || (echo "usage: make restore f=backups/file.sql.gz" && exit 1)
-	gunzip -c $(f) | $(COMPOSE) exec -T db psql -U postgres -d leepasports
+	gunzip -c $(f) | $(COMPOSE) exec -T db psql -U postgres -d chobbar

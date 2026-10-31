@@ -1,5 +1,3 @@
-from datetime import timedelta
-
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
@@ -7,27 +5,18 @@ from django.utils import timezone
 from apps.core.exceptions import BusinessError
 
 from . import tokens
-from .models import Company, CompanyInvitation, CompanyMember, User
+from .models import Address, NewsletterSubscriber, User
 
 
 @transaction.atomic
-def register_user(*, email, password, first_name="", last_name="", phone="", company_name=None, business_type=None, country="US"):
-    user = User.objects.create_user(email=email, password=password, first_name=first_name, last_name=last_name, phone=phone)
-    if company_name:
-        create_company(user=user, name=company_name, business_type=business_type or Company.BusinessType.CLUB, country=country)
+def register_user(*, email, password, first_name="", last_name="", phone="", marketing_opt_in=True):
+    user = User.objects.create_user(
+        email=email, password=password, first_name=first_name, last_name=last_name, phone=phone, marketing_opt_in=marketing_opt_in
+    )
+    if marketing_opt_in:
+        subscribe_newsletter(email, user=user, source="signup")
     send_verification_email(user)
     return user
-
-
-def create_company(*, user, name, business_type, country="US", **extra) -> Company:
-    company = Company.objects.create(name=name, business_type=business_type, country=country, **extra)
-    CompanyMember.objects.create(
-        company=company,
-        user=user,
-        role=CompanyMember.Role.OWNER,
-        is_default=not CompanyMember.objects.filter(user=user, is_default=True).exists(),
-    )
-    return company
 
 
 def send_verification_email(user: User):
@@ -60,7 +49,7 @@ def request_password_reset(email: str):
 
     user = User.objects.filter(email__iexact=email, is_active=True).first()
     if not user:
-        return  # Do not reveal whether the account exists.
+        return
     token = tokens.make_token(user, tokens.RESET_SALT)
     send_email_task.delay(
         template="password_reset",
@@ -85,7 +74,6 @@ def reset_password(token: str, new_password: str) -> User:
 
 @transaction.atomic
 def google_login(id_token: str) -> User:
-    """Verify a Google ID token and return (or create) the matching user."""
     from google.auth.transport import requests as google_requests
     from google.oauth2 import id_token as google_id_token
 
@@ -132,56 +120,29 @@ def google_login(id_token: str) -> User:
     return user
 
 
-@transaction.atomic
-def invite_member(*, company: Company, inviter: User, email: str, role: str) -> CompanyInvitation:
-    from apps.notifications.tasks import send_email_task
+def subscribe_newsletter(email: str, user=None, source: str = "footer") -> NewsletterSubscriber:
+    sub, created = NewsletterSubscriber.objects.get_or_create(email=email.lower(), defaults={"user": user, "source": source})
+    if not created and not sub.is_active:
+        sub.is_active = True
+        sub.unsubscribed_at = None
+        sub.save(update_fields=["is_active", "unsubscribed_at"])
+    return sub
 
-    email = email.lower()
-    if CompanyMember.objects.filter(company=company, user__email=email).exists():
-        raise BusinessError("This person is already a member of your company.")
-    CompanyInvitation.objects.filter(company=company, email=email, status=CompanyInvitation.Status.PENDING).update(
-        status=CompanyInvitation.Status.REVOKED
+
+def unsubscribe_newsletter(email: str):
+    NewsletterSubscriber.objects.filter(email=email.lower(), is_active=True).update(
+        is_active=False, unsubscribed_at=timezone.now()
     )
-    invitation = CompanyInvitation.objects.create(
-        company=company,
-        email=email,
-        role=role,
-        invited_by=inviter,
-        expires_at=timezone.now() + timedelta(days=7),
-    )
-    send_email_task.delay(
-        template="company_invitation",
-        to=[email],
-        context={
-            "company": company.name,
-            "inviter": inviter.full_name,
-            "role": invitation.get_role_display(),
-            "url": f"{settings.FRONTEND_URL}/invitations/{invitation.token}",
-        },
-    )
-    return invitation
 
 
 @transaction.atomic
-def accept_invitation(*, token: str, user: User) -> CompanyMember:
-    invitation = CompanyInvitation.objects.select_for_update().select_related("company").filter(token=token).first()
-    if not invitation or not invitation.is_valid:
-        raise BusinessError("This invitation is invalid or has expired.")
-    if invitation.email.lower() != user.email.lower():
-        raise BusinessError("This invitation was sent to a different email address.")
-    membership, _ = CompanyMember.objects.get_or_create(company=invitation.company, user=user, defaults={"role": invitation.role})
-    invitation.status = CompanyInvitation.Status.ACCEPTED
-    invitation.accepted_at = timezone.now()
-    invitation.save(update_fields=["status", "accepted_at"])
-    return membership
-
-
-@transaction.atomic
-def set_default_company(user: User, company: Company) -> CompanyMember:
-    membership = CompanyMember.objects.filter(user=user, company=company, is_active=True).first()
-    if not membership:
-        raise BusinessError("You are not a member of that company.")
-    CompanyMember.objects.filter(user=user, is_default=True).update(is_default=False)
-    membership.is_default = True
-    membership.save(update_fields=["is_default"])
-    return membership
+def save_address(user: User, data: dict, instance: Address | None = None) -> Address:
+    if data.get("is_default") or not Address.objects.filter(user=user).exclude(pk=getattr(instance, "pk", None)).exists():
+        Address.objects.filter(user=user, is_default=True).exclude(pk=getattr(instance, "pk", None)).update(is_default=False)
+        data["is_default"] = True
+    if instance:
+        for key, value in data.items():
+            setattr(instance, key, value)
+        instance.save()
+        return instance
+    return Address.objects.create(user=user, **data)

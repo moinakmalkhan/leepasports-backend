@@ -14,7 +14,6 @@ def serialize_message(message: Message) -> dict:
     sender = message.sender
     return {
         "id": str(message.uid),
-        "conversation": str(message.conversation.uid) if hasattr(message, "conversation") else None,
         "kind": message.kind,
         "body": message.body,
         "attachment": message.attachment.url if message.attachment else None,
@@ -40,11 +39,11 @@ def broadcast(conversation: Conversation, event: dict):
 
 
 @transaction.atomic
-def start_conversation(*, user, company, subject: str, body: str, order=None, quote=None) -> Conversation:
-    subject = (subject or "").strip()[:160] or "New conversation"
+def start_conversation(*, user, subject: str, body: str, order=None, topic: str = "") -> Conversation:
+    subject = (subject or "").strip()[:160] or "Support request"
     if not body.strip():
         raise BusinessError("Write a message to start the conversation.")
-    conversation = Conversation.objects.create(company=company, created_by=user, subject=subject, order=order, quote=quote)
+    conversation = Conversation.objects.create(created_by=user, subject=subject, order=order, topic=topic[:20])
     participants = [Participant(conversation=conversation, user=user, last_read_at=timezone.now())]
     for staff in User.objects.filter(is_staff=True, is_active=True)[:10]:
         if staff.pk != user.pk:
@@ -80,9 +79,10 @@ def post_message(
         message_count=F("message_count") + 1,
         status=Conversation.Status.PENDING if (sender and sender.is_staff) else Conversation.Status.OPEN,
     )
-    Participant.objects.get_or_create(conversation=conversation, user=sender) if sender else None
     if sender:
-        Participant.objects.filter(conversation=conversation, user=sender).update(last_read_at=message.created_at)
+        Participant.objects.update_or_create(
+            conversation=conversation, user=sender, defaults={"last_read_at": message.created_at}
+        )
     payload = {"event": "message", "message": serialize_message(message)}
     after_commit(lambda: broadcast(conversation, payload))
     after_commit(lambda: emit("chat.message", message_id=message.pk))
@@ -96,8 +96,4 @@ def mark_read(conversation: Conversation, user):
 
 
 def can_access(user, conversation: Conversation) -> bool:
-    if user.is_staff:
-        return True
-    if conversation.company_id is None:
-        return conversation.created_by_id == user.pk
-    return user.memberships.filter(company_id=conversation.company_id, is_active=True).exists()
+    return user.is_staff or conversation.created_by_id == user.pk

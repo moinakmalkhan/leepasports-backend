@@ -1,29 +1,31 @@
-"""Operations dashboard: KPIs, charts and work queues for Leepa staff."""
+"""Store dashboard: sales KPIs, work queues, charts and top lists."""
 
 import json
 from datetime import timedelta
 from decimal import Decimal
 
+from django.conf import settings
 from django.db.models import Count, F, Q, Sum
 from django.db.models.functions import TruncDate
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.html import format_html
 
-from apps.accounts.models import Company
-from apps.catalog.models import Product
+from apps.accounts.models import NewsletterSubscriber, User
+from apps.cart.models import Cart
+from apps.catalog.models import ProductVariant
 from apps.chat.models import Conversation
-from apps.orders.models import Order
+from apps.orders.models import Order, OrderItem, ReturnRequest
 from apps.payments.models import Payment
-from apps.quotes.models import Quote
+from apps.reviews.models import Review
 
 from .admin_utils import STATUS_COLORS
 
-REVENUE_STATUSES = [s for s in Order.Status if s not in (Order.Status.CANCELLED, Order.Status.PENDING_APPROVAL)]
+REVENUE_STATUSES = [s for s in Order.Status if s not in (Order.Status.CANCELLED, Order.Status.RETURNED)]
 
 
-def _money(value, currency="USD"):
-    return f"{currency} {Decimal(value or 0):,.2f}"
+def _money(value):
+    return f"Rs {Decimal(value or 0):,.0f}"
 
 
 def _badge(status, label=None):
@@ -40,7 +42,7 @@ def _link(url, text):
     )
 
 
-def _pct_change(current, previous):
+def _pct(current, previous):
     if not previous:
         return None
     return round((current - previous) / previous * 100, 1)
@@ -49,43 +51,41 @@ def _pct_change(current, previous):
 def dashboard_callback(request, context):
     now = timezone.now()
     today = now.date()
-    d7 = now - timedelta(days=7)
-    d30 = now - timedelta(days=30)
-    d60 = now - timedelta(days=60)
-
-    orders = Order.objects.exclude(status=Order.Status.CANCELLED)
-    revenue = orders.filter(status__in=REVENUE_STATUSES)
+    d7, d30, d60 = now - timedelta(days=7), now - timedelta(days=30), now - timedelta(days=60)
+    revenue = Order.objects.filter(status__in=REVENUE_STATUSES)
     stats = revenue.aggregate(
         rev_30=Sum("grand_total", filter=Q(created_at__gte=d30)),
         rev_prev=Sum("grand_total", filter=Q(created_at__gte=d60, created_at__lt=d30)),
         orders_30=Count("id", filter=Q(created_at__gte=d30)),
         orders_prev=Count("id", filter=Q(created_at__gte=d60, created_at__lt=d30)),
+        today_rev=Sum("grand_total", filter=Q(created_at__date=today)),
+        today_n=Count("id", filter=Q(created_at__date=today)),
         pcs_30=Sum("total_quantity", filter=Q(created_at__gte=d30)),
-        today=Count("id", filter=Q(created_at__date=today)),
     )
+    aov = (stats["rev_30"] or 0) / stats["orders_30"] if stats["orders_30"] else 0
     queues = {
-        "approval": Order.objects.filter(status=Order.Status.PENDING_APPROVAL).count(),
-        "awaiting_payment": Order.objects.filter(status=Order.Status.PENDING_PAYMENT).count(),
-        "to_produce": Order.objects.filter(status=Order.Status.CONFIRMED).count(),
-        "in_production": Order.objects.filter(status__in=[Order.Status.IN_PRODUCTION, Order.Status.QUALITY_CHECK]).count(),
-        "shipped": Order.objects.filter(status=Order.Status.SHIPPED).count(),
-        "overdue": Order.objects.filter(
-            payment_status__in=[Order.PaymentStatus.UNPAID, Order.PaymentStatus.DEPOSIT_PAID], due_date__lt=today
-        )
-        .exclude(status=Order.Status.CANCELLED)
-        .count(),
-        "late": Order.objects.filter(
-            status__in=[Order.Status.CONFIRMED, Order.Status.IN_PRODUCTION, Order.Status.QUALITY_CHECK],
-            estimated_ship_date__lt=today,
+        "new": Order.objects.filter(status=Order.Status.PENDING).count(),
+        "to_pack": Order.objects.filter(status=Order.Status.CONFIRMED).count(),
+        "packing": Order.objects.filter(status=Order.Status.PROCESSING).count(),
+        "shipped": Order.objects.filter(status__in=[Order.Status.SHIPPED, Order.Status.OUT_FOR_DELIVERY]).count(),
+        "payments": Payment.objects.filter(status=Payment.Status.SUBMITTED).count(),
+        "returns": ReturnRequest.objects.filter(
+            status__in=[ReturnRequest.Status.REQUESTED, ReturnRequest.Status.APPROVED, ReturnRequest.Status.RECEIVED]
+        ).count(),
+        "reviews": Review.objects.filter(status=Review.Status.PENDING).count(),
+        "chats": Conversation.objects.filter(status=Conversation.Status.OPEN).count(),
+        "low_stock": ProductVariant.objects.filter(
+            is_active=True, product__is_active=True, stock__lte=settings.SHOP["LOW_STOCK_THRESHOLD"]
         ).count(),
     }
-    payments_to_confirm = Payment.objects.filter(status=Payment.Status.SUBMITTED).count()
-    quotes_pending = Quote.objects.filter(status__in=[Quote.Status.SUBMITTED, Quote.Status.UNDER_REVIEW]).count()
-    chats_open = Conversation.objects.filter(status=Conversation.Status.OPEN).count()
-    new_companies = Company.objects.filter(created_at__gte=d7).count()
-    unverified = Company.objects.filter(is_verified=False, is_active=True).count()
+    customers_7 = User.objects.filter(created_at__gte=d7, is_staff=False).count()
+    subscribers = NewsletterSubscriber.objects.filter(is_active=True).count()
+    abandoned = (
+        Cart.objects.annotate(n=Count("items"))
+        .filter(n__gt=0, updated_at__lt=now - timedelta(hours=2), updated_at__gte=d7)
+        .count()
+    )
 
-    # Revenue & orders per day (30 days) — one query.
     daily = (
         revenue.filter(created_at__gte=d30)
         .annotate(day=TruncDate("created_at"))
@@ -93,7 +93,7 @@ def dashboard_callback(request, context):
         .annotate(total=Sum("grand_total"), n=Count("id"))
         .order_by("day")
     )
-    by_day = {row["day"]: row for row in daily}
+    by_day = {r["day"]: r for r in daily}
     labels, rev_series, count_series = [], [], []
     for i in range(29, -1, -1):
         day = today - timedelta(days=i)
@@ -102,47 +102,34 @@ def dashboard_callback(request, context):
         rev_series.append(float(row["total"]) if row else 0)
         count_series.append(row["n"] if row else 0)
 
-    # Top categories by pieces (30d).
-    from apps.orders.models import OrderItem
-
     cats = (
         OrderItem.objects.filter(order__created_at__gte=d30, order__status__in=REVENUE_STATUSES, product__isnull=False)
         .values(name=F("product__category__name"))
-        .annotate(pcs=Sum("quantity"), rev=Sum("line_total"))
+        .annotate(pcs=Sum("quantity"))
         .order_by("-pcs")[:8]
     )
+    methods = list(revenue.filter(created_at__gte=d30).values("payment_method").annotate(n=Count("id")).order_by("-n"))
     top_products = (
         OrderItem.objects.filter(order__created_at__gte=d30, order__status__in=REVENUE_STATUSES)
         .values("product_name", "sku")
         .annotate(pcs=Sum("quantity"), rev=Sum("line_total"))
         .order_by("-pcs")[:6]
     )
-    top_companies = (
+    top_cities = (
         revenue.filter(created_at__gte=d30)
-        .values("company__name", "company_id")
-        .annotate(rev=Sum("grand_total"), n=Count("id"))
-        .order_by("-rev")[:6]
+        .values(city=F("shipping_address__city"))
+        .annotate(n=Count("id"), rev=Sum("grand_total"))
+        .order_by("-n")[:6]
     )
-
-    status_mix = list(
-        Order.objects.filter(status__in=Order.OPEN_STATUSES).values("status").annotate(n=Count("id")).order_by("status")
+    recent = Order.objects.order_by("-created_at")[:8]
+    low = (
+        ProductVariant.objects.filter(is_active=True, product__is_active=True, stock__lte=settings.SHOP["LOW_STOCK_THRESHOLD"])
+        .select_related("product")
+        .order_by("stock")[:8]
     )
-
-    recent_orders = Order.objects.select_related("company").order_by("-created_at")[:8]
-    pending_quotes = (
-        Quote.objects.filter(status__in=[Quote.Status.SUBMITTED, Quote.Status.UNDER_REVIEW])
-        .select_related("company")
-        .order_by("created_at")[:6]
+    pending_reviews = (
+        Review.objects.filter(status=Review.Status.PENDING).select_related("product", "user").order_by("created_at")[:5]
     )
-    payments = (
-        Payment.objects.filter(status=Payment.Status.SUBMITTED).select_related("order__company").order_by("submitted_at")[:6]
-    )
-    low_stock = Product.objects.filter(is_active=True, is_made_to_order=False, stock_quantity__lte=20).order_by("stock_quantity")[
-        :6
-    ]
-
-    def order_url(o):
-        return reverse("admin:orders_order_change", args=[o.pk])
 
     context.update(
         {
@@ -150,85 +137,85 @@ def dashboard_callback(request, context):
                 {
                     "title": "Revenue (30d)",
                     "value": _money(stats["rev_30"]),
-                    "change": _pct_change(stats["rev_30"] or 0, stats["rev_prev"] or 0),
+                    "change": _pct(stats["rev_30"] or 0, stats["rev_prev"] or 0),
                     "icon": "payments",
-                    "footer": f"{stats['pcs_30'] or 0:,} pieces ordered",
+                    "footer": f"{stats['pcs_30'] or 0:,} items sold",
                 },
                 {
                     "title": "Orders (30d)",
                     "value": f"{stats['orders_30']:,}",
-                    "change": _pct_change(stats["orders_30"], stats["orders_prev"]),
+                    "change": _pct(stats["orders_30"], stats["orders_prev"]),
                     "icon": "shopping_bag",
-                    "footer": f"{stats['today']} today",
+                    "footer": f"{stats['today_n']} today · {_money(stats['today_rev'])}",
+                },
+                {"title": "Avg order value", "value": _money(aov), "icon": "receipt_long", "footer": "last 30 days"},
+                {
+                    "title": "New orders to confirm",
+                    "value": queues["new"],
+                    "icon": "ring_volume",
+                    "href": reverse("admin:orders_order_changelist") + "?status__exact=pending",
+                    "footer": "COD confirmation calls",
+                    "tone": "warning" if queues["new"] else None,
                 },
                 {
-                    "title": "Quotes awaiting reply",
-                    "value": quotes_pending,
-                    "icon": "request_quote",
-                    "href": reverse("admin:quotes_quote_changelist") + "?status__in=submitted,under_review",
-                    "footer": "Target: reply within 1 business day",
-                    "tone": "warning" if quotes_pending else None,
-                },
-                {
-                    "title": "Payments to confirm",
-                    "value": payments_to_confirm,
+                    "title": "Payments to verify",
+                    "value": queues["payments"],
                     "icon": "fact_check",
                     "href": reverse("admin:payments_payment_changelist") + "?status__exact=submitted",
-                    "footer": f"{queues['overdue']} invoices overdue",
-                    "tone": "warning" if payments_to_confirm else None,
+                    "footer": "bank transfer receipts",
+                    "tone": "warning" if queues["payments"] else None,
                 },
                 {
-                    "title": "Open conversations",
-                    "value": chats_open,
-                    "icon": "forum",
-                    "href": reverse("admin:chat_conversation_changelist") + "?status__exact=open",
-                    "footer": "Customers waiting on us",
-                },
-                {
-                    "title": "New companies (7d)",
-                    "value": new_companies,
-                    "icon": "domain_add",
-                    "href": reverse("admin:accounts_company_changelist") + "?is_verified__exact=0",
-                    "footer": f"{unverified} awaiting verification",
+                    "title": "New customers (7d)",
+                    "value": customers_7,
+                    "icon": "person_add",
+                    "href": reverse("admin:accounts_user_changelist"),
+                    "footer": f"{subscribers:,} newsletter subscribers",
                 },
             ],
             "queues": [
                 {
-                    "label": "Needs company approval",
-                    "count": queues["approval"],
-                    "status": "pending_approval",
-                    "href": reverse("admin:orders_order_changelist") + "?status__exact=pending_approval",
+                    "label": "Awaiting confirmation",
+                    "count": queues["new"],
+                    "href": reverse("admin:orders_order_changelist") + "?status__exact=pending",
                 },
                 {
-                    "label": "Awaiting payment",
-                    "count": queues["awaiting_payment"],
-                    "status": "pending_payment",
-                    "href": reverse("admin:orders_order_changelist") + "?status__exact=pending_payment",
-                },
-                {
-                    "label": "Ready for production",
-                    "count": queues["to_produce"],
-                    "status": "confirmed",
+                    "label": "Ready to pack",
+                    "count": queues["to_pack"],
                     "href": reverse("admin:orders_order_changelist") + "?status__exact=confirmed",
                 },
                 {
-                    "label": "In production / QC",
-                    "count": queues["in_production"],
-                    "status": "in_production",
-                    "href": reverse("admin:orders_order_changelist") + "?status__in=in_production,quality_check",
+                    "label": "Being packed",
+                    "count": queues["packing"],
+                    "href": reverse("admin:orders_order_changelist") + "?status__exact=processing",
                 },
                 {
-                    "label": "Shipped, awaiting delivery",
+                    "label": "In transit",
                     "count": queues["shipped"],
-                    "status": "shipped",
-                    "href": reverse("admin:orders_order_changelist") + "?status__exact=shipped",
+                    "href": reverse("admin:orders_order_changelist") + "?status__in=shipped,out_for_delivery",
                 },
                 {
-                    "label": "Behind estimated ship date",
-                    "count": queues["late"],
-                    "status": "overdue",
-                    "href": reverse("admin:orders_order_changelist") + "?late=1",
+                    "label": "Returns to handle",
+                    "count": queues["returns"],
+                    "href": reverse("admin:orders_returnrequest_changelist") + "?status__in=requested,approved,received",
                 },
+                {
+                    "label": "Reviews to moderate",
+                    "count": queues["reviews"],
+                    "href": reverse("admin:reviews_review_changelist") + "?status__exact=pending",
+                },
+                {
+                    "label": "Open support chats",
+                    "count": queues["chats"],
+                    "href": reverse("admin:chat_conversation_changelist") + "?status__exact=open",
+                },
+                {
+                    "label": "Low-stock variants",
+                    "count": queues["low_stock"],
+                    "href": reverse("admin:catalog_productvariant_changelist")
+                    + f"?stock_to={settings.SHOP['LOW_STOCK_THRESHOLD']}",
+                },
+                {"label": "Abandoned bags (7d)", "count": abandoned, "href": reverse("admin:cart_cart_changelist")},
             ],
             "revenue_chart": json.dumps(
                 {
@@ -237,8 +224,8 @@ def dashboard_callback(request, context):
                         {
                             "label": "Revenue",
                             "data": rev_series,
-                            "borderColor": "oklch(64.6% .222 41.116)",
-                            "backgroundColor": "oklch(64.6% .222 41.116 / .15)",
+                            "borderColor": "oklch(64.5% .246 16.439)",
+                            "backgroundColor": "oklch(64.5% .246 16.439 / .15)",
                             "fill": True,
                             "tension": 0.35,
                             "pointRadius": 0,
@@ -253,7 +240,7 @@ def dashboard_callback(request, context):
                         {
                             "label": "Orders",
                             "data": count_series,
-                            "backgroundColor": "oklch(55.4% .046 257.417 / .7)",
+                            "backgroundColor": "oklch(55.3% .013 58.071 / .7)",
                             "borderRadius": 4,
                         }
                     ],
@@ -264,86 +251,63 @@ def dashboard_callback(request, context):
                     "labels": [c["name"] for c in cats],
                     "datasets": [
                         {
-                            "label": "Pieces",
+                            "label": "Items",
                             "data": [c["pcs"] for c in cats],
-                            "backgroundColor": "oklch(64.6% .222 41.116 / .8)",
+                            "backgroundColor": "oklch(64.5% .246 16.439 / .8)",
                             "borderRadius": 4,
                         }
                     ],
                 }
             ),
-            "status_mix": [{"label": Order.Status(s["status"]).label, "n": s["n"], "status": s["status"]} for s in status_mix],
+            "payment_mix": [{"label": Order.PaymentMethod(m["payment_method"]).label, "n": m["n"]} for m in methods],
             "recent_orders": {
-                "headers": ["Order", "Company", "Status", "Payment", "Total", "Placed"],
+                "headers": ["Order", "Customer", "City", "Status", "Payment", "Total", "Placed"],
                 "rows": [
                     [
-                        _link(order_url(o), o.number),
-                        o.company.name,
+                        _link(reverse("admin:orders_order_change", args=[o.pk]), o.number),
+                        o.shipping_address.get("full_name", o.email),
+                        o.shipping_address.get("city", ""),
                         _badge(o.status, o.get_status_display()),
                         _badge(o.payment_status, o.get_payment_status_display()),
-                        _money(o.grand_total, o.currency),
+                        _money(o.grand_total),
                         o.created_at.strftime("%d %b %H:%M"),
                     ]
-                    for o in recent_orders
-                ],
-            },
-            "pending_quotes": {
-                "headers": ["Quote", "Company", "Pieces", "List total", "Waiting"],
-                "rows": [
-                    [
-                        _link(reverse("admin:quotes_quote_change", args=[q.pk]), q.number),
-                        q.company.name,
-                        f"{q.total_quantity:,}",
-                        _money(q.requested_total, q.currency),
-                        f"{(now - q.created_at).days}d {(now - q.created_at).seconds // 3600}h",
-                    ]
-                    for q in pending_quotes
-                ],
-            },
-            "payments": {
-                "headers": ["Order", "Company", "Amount", "Reference", "Submitted"],
-                "rows": [
-                    [
-                        _link(reverse("admin:payments_payment_change", args=[p.pk]), p.order.number),
-                        p.order.company.name,
-                        _money(p.amount, p.currency),
-                        p.reference or "—",
-                        p.submitted_at.strftime("%d %b") if p.submitted_at else "—",
-                    ]
-                    for p in payments
+                    for o in recent
                 ],
             },
             "top_products": {
-                "headers": ["Product", "SKU", "Pieces", "Revenue"],
+                "headers": ["Product", "SKU", "Sold", "Revenue"],
                 "rows": [[t["product_name"], t["sku"], f"{t['pcs']:,}", _money(t["rev"])] for t in top_products],
             },
-            "top_companies": {
-                "headers": ["Company", "Orders", "Revenue"],
-                "rows": [
-                    [
-                        _link(reverse("admin:accounts_company_change", args=[c["company_id"]]), c["company__name"]),
-                        c["n"],
-                        _money(c["rev"]),
-                    ]
-                    for c in top_companies
-                ],
+            "top_cities": {
+                "headers": ["City", "Orders", "Revenue"],
+                "rows": [[c["city"] or "—", c["n"], _money(c["rev"])] for c in top_cities],
             },
             "low_stock": {
-                "headers": ["Product", "SKU", "Stock"],
+                "headers": ["Product", "Variant", "SKU", "Stock"],
                 "rows": [
-                    [_link(reverse("admin:catalog_product_change", args=[p.pk]), p.name), p.sku, p.stock_quantity]
-                    for p in low_stock
+                    [_link(reverse("admin:catalog_product_change", args=[v.product_id]), v.product.name), v.label, v.sku, v.stock]
+                    for v in low
+                ],
+            },
+            "pending_reviews": {
+                "headers": ["Product", "Rating", "By", "Waiting"],
+                "rows": [
+                    [
+                        _link(reverse("admin:reviews_review_change", args=[r.pk]), r.product.name),
+                        "★" * r.rating,
+                        r.user.email,
+                        f"{(now - r.created_at).days}d",
+                    ]
+                    for r in pending_reviews
                 ],
             },
             "quick_links": [
                 {"title": "Add product", "icon": "add_box", "href": reverse("admin:catalog_product_add")},
-                {"title": "Update mill prices", "icon": "texture", "href": reverse("admin:catalog_fabric_changelist")},
-                {
-                    "title": "Verify companies",
-                    "icon": "verified",
-                    "href": reverse("admin:accounts_company_changelist") + "?is_verified__exact=0",
-                },
+                {"title": "New coupon", "icon": "confirmation_number", "href": reverse("admin:promotions_coupon_add")},
+                {"title": "Edit banners", "icon": "view_carousel", "href": reverse("admin:content_banner_changelist")},
                 {"title": "Reports & exports", "icon": "monitoring", "href": reverse("admin:reports")},
+                {"title": "Storefront", "icon": "storefront", "href": settings.FRONTEND_URL},
                 {"title": "API docs", "icon": "api", "href": "/api/docs/"},
             ],
         }

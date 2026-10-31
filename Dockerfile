@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# Local development image for the Leepa Sports API.
+# Local development image for the Chobbar Shop API.
 # Code is bind-mounted by docker-compose, so edits reload without rebuilding;
 # rebuild only when requirements change (`make build`).
 # No apt packages needed: psycopg[binary] ships libpq, healthchecks use Python.

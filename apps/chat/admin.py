@@ -18,7 +18,7 @@ class MessageInline(TabularInline):
     model = Message
     extra = 0
     fields = ("created_at", "sender", "kind", "body", "attachment")
-    readonly_fields = ("created_at", "sender", "kind", "body", "attachment")
+    readonly_fields = fields
     can_delete = False
     max_num = 0
     ordering = ("created_at",)
@@ -26,23 +26,23 @@ class MessageInline(TabularInline):
 
 @admin.register(Conversation)
 class ConversationAdmin(ModelAdmin):
-    list_display = ("subject", "company", "status_badge", "linked", "assigned_to", "message_count", "last_message_at", "preview")
-    list_filter = (("status", ChoicesDropdownFilter), ("company", RelatedDropdownFilter), ("assigned_to", RelatedDropdownFilter))
-    list_filter_submit = True
-    search_fields = ("subject", "company__name", "messages__body")
-    inlines = (MessageInline,)
-    list_select_related = ("company", "assigned_to", "order", "quote")
-    readonly_fields = (
-        "uid",
-        "company",
+    list_display = (
+        "subject",
         "created_by",
-        "order",
-        "quote",
-        "last_message_at",
-        "last_message_preview",
+        "topic",
+        "status_badge",
+        "linked",
+        "assigned_to",
         "message_count",
-        "created_at",
+        "last_message_at",
+        "preview",
     )
+    list_filter = (("status", ChoicesDropdownFilter), "topic", ("assigned_to", RelatedDropdownFilter))
+    list_filter_submit = True
+    search_fields = ("subject", "created_by__email", "messages__body")
+    inlines = (MessageInline,)
+    list_select_related = ("created_by", "assigned_to", "order")
+    readonly_fields = ("uid", "created_by", "order", "last_message_at", "last_message_preview", "message_count", "created_at")
     actions = ("assign_to_me", "close_selected")
     actions_detail = ("reply", "assign_me", "close_conversation")
 
@@ -61,12 +61,6 @@ class ConversationAdmin(ModelAdmin):
                 reverse("admin:orders_order_change", args=[obj.order_id]),
                 obj.order.number,
             )
-        if obj.quote_id:
-            return format_html(
-                '<a class="underline" href="{}">Quote {}</a>',
-                reverse("admin:quotes_quote_change", args=[obj.quote_id]),
-                obj.quote.number,
-            )
         return "General"
 
     @display(description="Last message")
@@ -80,7 +74,7 @@ class ConversationAdmin(ModelAdmin):
         permissions=("change",),
         dialog={
             "title": "Reply to customer",
-            "description": "Delivered instantly over chat and as a notification.",
+            "description": "Delivered instantly in chat and as a notification.",
             "form_class": NoteForm,
             "form_submit_text": "Send",
         },
@@ -98,25 +92,25 @@ class ConversationAdmin(ModelAdmin):
     @action(description="Assign to me", icon="person_check", permissions=("change",))
     def assign_me(self, request, object_id):
         Conversation.objects.filter(pk=object_id).update(assigned_to=request.user)
-        self.message_user(request, "Conversation assigned to you.", messages.SUCCESS)
+        self.message_user(request, "Assigned to you.", messages.SUCCESS)
         return redirect(reverse("admin:chat_conversation_change", args=[object_id]))
 
     @action(description="Close", icon="done_all", permissions=("change",))
     def close_conversation(self, request, object_id):
         conversation = Conversation.objects.get(pk=object_id)
         services.post_message(
-            conversation, sender=request.user, body="Conversation closed by Leepa Sports.", kind=Message.Kind.SYSTEM
+            conversation, sender=request.user, body="Conversation closed by Chobbar support.", kind=Message.Kind.SYSTEM
         )
         Conversation.objects.filter(pk=object_id).update(status=Conversation.Status.CLOSED)
-        self.message_user(request, "Conversation closed.", messages.SUCCESS)
+        self.message_user(request, "Closed.", messages.SUCCESS)
         return redirect(reverse("admin:chat_conversation_change", args=[object_id]))
 
     @action(description="Assign selected to me", icon="person_check")
     def assign_to_me(self, request, queryset):
         n = queryset.update(assigned_to=request.user)
-        self.message_user(request, f"{n} conversation(s) assigned to you.", messages.SUCCESS)
+        self.message_user(request, f"{n} assigned to you.", messages.SUCCESS)
 
     @action(description="Close selected", icon="done_all")
     def close_selected(self, request, queryset):
         n = queryset.update(status=Conversation.Status.CLOSED)
-        self.message_user(request, f"{n} conversation(s) closed.", messages.SUCCESS)
+        self.message_user(request, f"{n} closed.", messages.SUCCESS)

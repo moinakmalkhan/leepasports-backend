@@ -39,16 +39,16 @@
         {% component "unfold/components/card.html" with title="Orders per day" title_icon="shopping_bag" %}
           {% component "unfold/components/chart/bar.html" with data=orders_chart height=200 %}{% endcomponent %}
         {% endcomponent %}
-        {% component "unfold/components/card.html" with title="Pieces by category (30d)" title_icon="category" %}
+        {% component "unfold/components/card.html" with title="Items by category (30d)" title_icon="category" %}
           {% component "unfold/components/chart/bar.html" with data=category_chart height=200 %}{% endcomponent %}
         {% endcomponent %}
       </div>
     </div>
 
     <div class="flex flex-col gap-6">
-      {% component "unfold/components/card.html" with title="Work queue" title_icon="checklist" description="Orders that need an action" %}
+      {% component "unfold/components/card.html" with title="Work queue" title_icon="checklist" description="Things that need an action" %}
         <ul class="divide-y divide-base-200 dark:divide-base-800 -my-2">
-          {% for q in queues %}
+          {% for q in queues|slice:":4" %}
             <li><a href="{{ q.href }}" class="flex items-center justify-between gap-3 py-2.5 hover:text-primary-600 dark:hover:text-primary-400">
               <span class="text-sm">{{ q.label }}</span>
               <span class="text-sm font-semibold tabular-nums {% if q.count %}text-important{% else %}text-subtle{% endif %}">{{ q.count }}</span>
@@ -67,11 +67,11 @@
         </div>
       {% endcomponent %}
 
-      {% if status_mix %}
-      {% component "unfold/components/card.html" with title="Open orders by status" title_icon="donut_small" %}
+      {% if payment_mix %}
+      {% component "unfold/components/card.html" with title="Payment methods (30d)" title_icon="donut_small" %}
         <ul class="flex flex-col gap-2">
-          {% for s in status_mix %}
-            <li class="flex items-center justify-between text-sm"><span>{{ s.label }}</span><span class="font-semibold tabular-nums">{{ s.n }}</span></li>
+          {% for m in payment_mix %}
+            <li class="flex items-center justify-between text-sm"><span>{{ m.label }}</span><span class="font-semibold tabular-nums">{{ m.n }}</span></li>
           {% endfor %}
         </ul>
       {% endcomponent %}
@@ -79,13 +79,12 @@
     </div>
   </div>
 
-  {# ---- Queues as tables ---- #}
   <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
-    {% component "unfold/components/card.html" with title="Quotes awaiting a reply" title_icon="request_quote" %}
-      {% component "unfold/components/table.html" with table=pending_quotes card_included=1 striped=1 %}{% endcomponent %}
+    {% component "unfold/components/card.html" with title="Low stock" title_icon="inventory_2" %}
+      {% component "unfold/components/table.html" with table=low_stock card_included=1 striped=1 %}{% endcomponent %}
     {% endcomponent %}
-    {% component "unfold/components/card.html" with title="Payment proofs to confirm" title_icon="fact_check" %}
-      {% component "unfold/components/table.html" with table=payments card_included=1 striped=1 %}{% endcomponent %}
+    {% component "unfold/components/card.html" with title="Reviews awaiting moderation" title_icon="reviews" %}
+      {% component "unfold/components/table.html" with table=pending_reviews card_included=1 striped=1 %}{% endcomponent %}
     {% endcomponent %}
   </div>
 
@@ -97,11 +96,15 @@
     {% component "unfold/components/card.html" with title="Top products (30d)" title_icon="apparel" %}
       {% component "unfold/components/table.html" with table=top_products card_included=1 %}{% endcomponent %}
     {% endcomponent %}
-    {% component "unfold/components/card.html" with title="Top companies (30d)" title_icon="domain" %}
-      {% component "unfold/components/table.html" with table=top_companies card_included=1 %}{% endcomponent %}
+    {% component "unfold/components/card.html" with title="Top cities (30d)" title_icon="location_city" %}
+      {% component "unfold/components/table.html" with table=top_cities card_included=1 %}{% endcomponent %}
     {% endcomponent %}
-    {% component "unfold/components/card.html" with title="Low stock (stocked items)" title_icon="inventory_2" %}
-      {% component "unfold/components/table.html" with table=low_stock card_included=1 %}{% endcomponent %}
+    {% component "unfold/components/card.html" with title="Order queue" title_icon="checklist" %}
+      <ul class="divide-y divide-base-200 dark:divide-base-800 -my-2">
+        {% for q in queues|slice:"4:" %}
+          <li><a href="{{ q.href }}" class="flex items-center justify-between gap-3 py-2.5 hover:text-primary-600"><span class="text-sm">{{ q.label }}</span><span class="text-sm font-semibold tabular-nums">{{ q.count }}</span></a></li>
+        {% endfor %}
+      </ul>
     {% endcomponent %}
   </div>
 </div>

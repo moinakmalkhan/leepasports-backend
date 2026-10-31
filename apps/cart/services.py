@@ -1,32 +1,50 @@
+"""Cart logic. Prices come from the catalog on every read; the client never sends a price."""
+
 import secrets
-import uuid
+from dataclasses import dataclass, field
 from decimal import Decimal
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import F
 
-from apps.catalog.models import Product
+from apps.catalog.models import ProductVariant
 from apps.core.exceptions import BusinessError
 from apps.core.utils import money
-from apps.pricing.selectors import resolve_configuration
-from apps.pricing.services import compute_price
 
-from .models import Cart, CartItem, SavedList, SavedListItem
+from .models import Cart, CartItem, Wishlist, WishlistItem
+
+MAX_QTY_PER_LINE = 10
+
+
+@dataclass
+class PricedItem:
+    item: CartItem
+    variant: ProductVariant
+    unit_price: Decimal
+    line_total: Decimal
+    available: int
+    issue: str = ""
+
+
+@dataclass
+class CartTotals:
+    cart: Cart
+    items: list[PricedItem]
+    subtotal: Decimal
+    discount: Decimal
+    coupon_code: str
+    coupon_message: str
+    free_shipping: bool
+    quantity: int
+    issues: list[str] = field(default_factory=list)
 
 
 def get_or_create_cart(request) -> Cart:
-    """Resolve the cart for this request: company cart for members, user cart
-    for people without a company, guest cart (by token header) otherwise."""
     user = request.user if request.user.is_authenticated else None
-    company = getattr(request, "company", None)
     guest_token = request.headers.get("X-Cart-Token", "")
-
     if user:
-        cart, _ = Cart.objects.get_or_create(
-            company=company,
-            user=user,
-            defaults={"currency": company.currency if company else Cart._meta.get_field("currency").default},
-        )
+        cart, _ = Cart.objects.get_or_create(user=user)
         if guest_token:
             merge_guest_cart(guest_token, cart)
         return cart
@@ -43,145 +61,145 @@ def merge_guest_cart(guest_token: str, target: Cart):
     if not guest:
         return
     for item in guest.items.all():
-        item.pk = None
-        item.uid = uuid.uuid4()
-        item.cart = target
-        item.save()
+        existing = target.items.filter(variant_id=item.variant_id).first()
+        if existing:
+            existing.quantity = min(existing.quantity + item.quantity, MAX_QTY_PER_LINE)
+            existing.save(update_fields=["quantity"])
+        else:
+            CartItem.objects.create(cart=target, variant_id=item.variant_id, quantity=item.quantity)
+    if guest.coupon_code and not target.coupon_code:
+        target.coupon_code = guest.coupon_code
+        target.save(update_fields=["coupon_code"])
     guest.delete()
 
 
-def price_item(item: CartItem, company):
-    product = item.product
-    product_obj, fabric, adjustment, normalised = resolve_configuration(
-        product=product, fabric=item.fabric.slug, breakdown=item.breakdown
+def priced_items(cart: Cart) -> list[PricedItem]:
+    items = cart.items.select_related("variant__product__category", "variant__color", "variant__size").prefetch_related(
+        "variant__product__images"
     )
-    result = compute_price(
-        product=product_obj, fabric=fabric, breakdown=normalised, company=company, fabric_adjustment=adjustment
+    out = []
+    for item in items:
+        v = item.variant
+        issue = ""
+        if not v.is_active or not v.product.is_active:
+            issue = "This item is no longer available."
+        elif v.stock <= 0:
+            issue = "Sold out — remove it to continue."
+        elif item.quantity > v.stock:
+            issue = f"Only {v.stock} left; quantity reduced."
+        qty = min(item.quantity, max(v.stock, 0)) if not issue or "reduced" in issue else (0 if issue else item.quantity)
+        unit = money(v.price)
+        out.append(
+            PricedItem(item=item, variant=v, unit_price=unit, line_total=money(unit * qty), available=v.stock, issue=issue)
+        )
+    return out
+
+
+def compute_totals(cart: Cart, *, user=None, email: str = "") -> CartTotals:
+    items = priced_items(cart)
+    valid = [i for i in items if not i.issue or "reduced" in i.issue]
+    subtotal = money(sum(i.line_total for i in valid))
+    quantity = sum(min(i.item.quantity, i.available) for i in valid)
+    discount, message, free_shipping, code = Decimal("0"), "", False, cart.coupon_code
+    if cart.coupon_code and valid:
+        from apps.promotions.services import validate_coupon
+
+        try:
+            result = validate_coupon(cart.coupon_code, items=valid, user=user, email=email)
+            discount, message, free_shipping, code = result.discount, result.message, result.free_shipping, result.coupon.code
+        except BusinessError as exc:
+            message = str(exc.detail)
+            code = ""
+    return CartTotals(
+        cart=cart,
+        items=items,
+        subtotal=subtotal,
+        discount=discount,
+        coupon_code=code,
+        coupon_message=message,
+        free_shipping=free_shipping,
+        quantity=quantity,
+        issues=[i.issue for i in items if i.issue],
     )
-    item.quantity = result.quantity
-    item.unit_price = result.unit_price
-    item.line_total = result.subtotal
-    item.price_breakdown = result.as_dict()
-    return result
 
 
 @transaction.atomic
-def add_item(
-    cart: Cart, company, *, product_slug, fabric_slug, breakdown, color="", customization=None, notes="", artwork=None
-) -> CartItem:
-    product, fabric, adjustment, normalised = resolve_configuration(product=product_slug, fabric=fabric_slug, breakdown=breakdown)
-    stored = [
-        {"gender": line["gender"], "size_id": line["size"].id, "size": line["size"].label, "quantity": line["quantity"]}
-        for line in normalised
-    ]
-    item = CartItem(
-        cart=cart,
-        product=product,
-        fabric=fabric,
-        breakdown=stored,
-        color=color or "",
-        customization=customization or {},
-        notes=notes or "",
-        artwork=artwork,
+def add_item(cart: Cart, *, variant_uid, quantity: int = 1) -> CartItem:
+    variant = (
+        ProductVariant.objects.select_related("product").filter(uid=variant_uid, is_active=True, product__is_active=True).first()
     )
-    price_item(item, company)
-    item.save()
+    if not variant:
+        raise BusinessError("That option isn't available.")
+    if variant.stock <= 0:
+        raise BusinessError(f"{variant.product.name} ({variant.label}) is sold out.")
+    quantity = max(1, quantity)
+    item = CartItem.objects.select_for_update().filter(cart=cart, variant=variant).first()
+    new_qty = (item.quantity if item else 0) + quantity
+    if new_qty > MAX_QTY_PER_LINE:
+        raise BusinessError(f"You can order up to {MAX_QTY_PER_LINE} of the same item.")
+    if new_qty > variant.stock:
+        raise BusinessError(f"Only {variant.stock} left in stock.")
+    if item:
+        item.quantity = new_qty
+        item.save(update_fields=["quantity", "updated_at"])
+    else:
+        item = CartItem.objects.create(cart=cart, variant=variant, quantity=new_qty)
     Cart.objects.filter(pk=cart.pk).update(updated_at=F("updated_at"))
     return item
 
 
 @transaction.atomic
-def update_item(item: CartItem, company, **changes) -> CartItem:
-    if "breakdown" in changes or "fabric_slug" in changes:
-        fabric_slug = changes.get("fabric_slug", item.fabric.slug)
-        product, fabric, adjustment, normalised = resolve_configuration(
-            product=item.product, fabric=fabric_slug, breakdown=changes.get("breakdown", item.breakdown)
-        )
-        item.fabric = fabric
-        item.breakdown = [
-            {"gender": line["gender"], "size_id": line["size"].id, "size": line["size"].label, "quantity": line["quantity"]}
-            for line in normalised
-        ]
-    for attr in ("color", "customization", "notes"):
-        if attr in changes and changes[attr] is not None:
-            setattr(item, attr, changes[attr])
-    if changes.get("artwork") is not None:
-        item.artwork = changes["artwork"]
-    price_item(item, company)
-    item.save()
+def set_quantity(item: CartItem, quantity: int) -> CartItem | None:
+    if quantity <= 0:
+        item.delete()
+        return None
+    if quantity > MAX_QTY_PER_LINE:
+        raise BusinessError(f"You can order up to {MAX_QTY_PER_LINE} of the same item.")
+    if quantity > item.variant.stock:
+        raise BusinessError(f"Only {item.variant.stock} left in stock.")
+    item.quantity = quantity
+    item.save(update_fields=["quantity", "updated_at"])
     return item
 
 
-@transaction.atomic
-def reprice_cart(cart: Cart, company) -> dict:
-    """Re-run pricing for every line (prices/rates may have moved) and return totals."""
-    items = list(cart.items.select_related("product__base_fabric", "product__category", "fabric"))
-    subtotal = Decimal("0")
-    savings = Decimal("0")
-    quantity = 0
-    for item in items:
-        try:
-            result = price_item(item, company)
-            savings += result.savings
-        except BusinessError as exc:
-            item.price_breakdown = {"error": str(exc)}
-        subtotal += item.line_total
-        quantity += item.quantity
-    CartItem.objects.bulk_update(items, ["quantity", "unit_price", "line_total", "price_breakdown"])
-    return {
-        "items": items,
-        "subtotal": money(subtotal),
-        "savings": money(savings),
-        "quantity": quantity,
-        "item_count": len(items),
-    }
+def apply_coupon(cart: Cart, code: str, *, user=None, email: str = ""):
+    from apps.promotions.services import validate_coupon
+
+    items = [i for i in priced_items(cart) if not i.issue or "reduced" in i.issue]
+    if not items:
+        raise BusinessError("Add something to your bag first.")
+    result = validate_coupon(code, items=items, user=user, email=email)
+    cart.coupon_code = result.coupon.code
+    cart.save(update_fields=["coupon_code", "updated_at"])
+    return result
+
+
+def remove_coupon(cart: Cart):
+    cart.coupon_code = ""
+    cart.save(update_fields=["coupon_code", "updated_at"])
+
+
+def purge_guest_carts(days: int | None = None):
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    cutoff = timezone.now() - timedelta(days=days or settings.SHOP["CART_GUEST_TTL_DAYS"])
+    return Cart.objects.filter(user__isnull=True, updated_at__lt=cutoff).delete()
+
+
+# ---- wishlist -------------------------------------------------------------
+def get_wishlist(user) -> Wishlist:
+    wishlist, _ = Wishlist.objects.get_or_create(user=user)
+    return wishlist
 
 
 @transaction.atomic
-def add_saved_list_to_cart(saved_list: SavedList, cart: Cart, company) -> int:
-    added = 0
-    for entry in saved_list.items.select_related("product", "fabric"):
-        if not entry.product.is_active:
-            continue
-        fabric_slug = entry.fabric.slug if entry.fabric else None
-        try:
-            add_item(
-                cart,
-                company,
-                product_slug=entry.product.slug,
-                fabric_slug=fabric_slug,
-                breakdown=entry.breakdown,
-                color=entry.color,
-                customization=entry.customization,
-                notes=entry.notes,
-            )
-            added += 1
-        except BusinessError:
-            continue
-    return added
-
-
-@transaction.atomic
-def save_cart_as_list(cart: Cart, company, user, name: str, description: str = "") -> SavedList:
-    saved = SavedList.objects.create(company=company, created_by=user, name=name, description=description)
-    SavedListItem.objects.bulk_create(
-        [
-            SavedListItem(
-                saved_list=saved,
-                product=i.product,
-                fabric=i.fabric,
-                breakdown=i.breakdown,
-                color=i.color,
-                customization=i.customization,
-                notes=i.notes,
-            )
-            for i in cart.items.all()
-        ]
-    )
-    return saved
-
-
-def validate_products_available(cart: Cart):
-    inactive = Product.objects.filter(pk__in=cart.items.values("product_id"), is_active=False).values_list("name", flat=True)
-    if inactive:
-        raise BusinessError(f"Some products are no longer available: {', '.join(inactive)}.")
+def toggle_wishlist(user, product, variant=None) -> bool:
+    wishlist = get_wishlist(user)
+    existing = WishlistItem.objects.filter(wishlist=wishlist, product=product).first()
+    if existing:
+        existing.delete()
+        return False
+    WishlistItem.objects.create(wishlist=wishlist, product=product, variant=variant)
+    return True

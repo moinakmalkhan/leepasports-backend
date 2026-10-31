@@ -1,1 +1,0 @@
-Your quote {{ quote.number }} is ready

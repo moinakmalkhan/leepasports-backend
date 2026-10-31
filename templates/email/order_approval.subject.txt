@@ -1,1 +1,0 @@
-Approval needed: order {{ order.number }}

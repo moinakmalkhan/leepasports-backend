@@ -18,33 +18,30 @@ from .models import BankAccount, Payment
 
 @admin.register(BankAccount)
 class BankAccountAdmin(ModelAdmin):
-    list_display = ("label", "bank_name", "account_name", "currency", "is_active")
-    list_editable = ("is_active",)
+    list_display = ("label", "bank_name", "account_name", "account_number", "is_active", "sort_order")
+    list_editable = ("is_active", "sort_order")
 
 
 @admin.register(Payment)
 class PaymentAdmin(ModelAdmin):
     list_display = (
         "order_link",
-        "company",
-        "kind",
+        "customer",
         "method",
         "status_badge",
         "amount_display",
         "reference",
         "proof_link",
-        "due_date",
         "submitted_at",
         "confirmed_at",
     )
-    list_filter = (("status", ChoicesDropdownFilter), ("kind", ChoicesDropdownFilter), "method", ("created_at", RangeDateFilter))
+    list_filter = (("status", ChoicesDropdownFilter), "method", ("created_at", RangeDateFilter))
     list_filter_submit = True
-    search_fields = ("order__number", "order__company__name", "reference")
-    list_select_related = ("order__company", "confirmed_by")
+    search_fields = ("order__number", "order__email", "order__phone", "reference")
+    list_select_related = ("order", "confirmed_by")
     readonly_fields = (
         "uid",
         "order",
-        "kind",
         "method",
         "currency",
         "status",
@@ -66,9 +63,9 @@ class PaymentAdmin(ModelAdmin):
             '<a class="underline" href="{}">{}</a>', reverse("admin:orders_order_change", args=[obj.order_id]), obj.order.number
         )
 
-    @display(description="Company")
-    def company(self, obj):
-        return obj.order.company.name
+    @display(description="Customer")
+    def customer(self, obj):
+        return obj.order.shipping_address.get("full_name") or obj.order.email
 
     @display(description="Status", label=STATUS_COLORS)
     def status_badge(self, obj):
@@ -76,7 +73,7 @@ class PaymentAdmin(ModelAdmin):
 
     @display(description="Amount", ordering="amount")
     def amount_display(self, obj):
-        return f"{obj.currency} {obj.amount:,.2f}"
+        return f"Rs {obj.amount:,.0f}"
 
     @display(description="Proof")
     def proof_link(self, obj):
@@ -89,7 +86,7 @@ class PaymentAdmin(ModelAdmin):
         permissions=("change",),
         dialog={
             "title": "Confirm payment received",
-            "description": "Updates the order's paid amount, moves it to Confirmed if it was awaiting payment, and notifies the customer.",
+            "description": "Marks the order paid, confirms it and notifies the customer.",
             "form_class": ConfirmPaymentForm,
             "form_submit_text": "Confirm",
         },
@@ -109,10 +106,10 @@ class PaymentAdmin(ModelAdmin):
     @action(description="Mark as failed", icon="error", variant=ActionVariant.DANGER, permissions=("change",))
     def mark_failed(self, request, object_id):
         Payment.objects.filter(pk=object_id).exclude(status=Payment.Status.CONFIRMED).update(status=Payment.Status.FAILED)
-        self.message_user(request, "Payment marked as failed. The customer can resubmit proof.", messages.WARNING)
+        self.message_user(request, "Marked as failed. The customer can resubmit.", messages.WARNING)
         return redirect(reverse("admin:payments_payment_change", args=[object_id]))
 
-    @action(description="Confirm selected (full amounts)", icon="verified")
+    @action(description="Confirm selected", icon="verified")
     def bulk_confirm(self, request, queryset):
         done = skipped = 0
         with transaction.atomic():
@@ -122,29 +119,12 @@ class PaymentAdmin(ModelAdmin):
                     done += 1
                 except BusinessError:
                     skipped += 1
-        self.message_user(
-            request, f"{done} payment(s) confirmed, {skipped} skipped.", messages.SUCCESS if done else messages.WARNING
-        )
+        self.message_user(request, f"{done} confirmed, {skipped} skipped.", messages.SUCCESS if done else messages.WARNING)
 
     @action(description="Export selected to CSV", icon="download")
     def export_payments(self, request, queryset):
         return export_csv(
             "payments",
-            ["Order", "Company", "Kind", "Method", "Status", "Amount", "Currency", "Reference", "Due", "Submitted", "Confirmed"],
-            (
-                (
-                    p.order.number,
-                    p.order.company.name,
-                    p.kind,
-                    p.method,
-                    p.status,
-                    p.amount,
-                    p.currency,
-                    p.reference,
-                    p.due_date,
-                    p.submitted_at,
-                    p.confirmed_at,
-                )
-                for p in queryset
-            ),
+            ["Order", "Method", "Status", "Amount", "Reference", "Submitted", "Confirmed"],
+            ((p.order.number, p.method, p.status, p.amount, p.reference, p.submitted_at, p.confirmed_at) for p in queryset),
         )

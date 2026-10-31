@@ -1,0 +1,5 @@
+{% extends "email/base.html" %}{% block content %}
+<h1 style="margin:0 0 12px;font-size:22px;">It's back 🎉</h1>
+<p style="line-height:1.6;color:#44403c;"><strong>{{ product }}</strong> ({{ variant }}) is available again. Sizes go fast — grab it before it's gone.</p>
+{% include "email/_button.html" with label="Shop now" %}
+{% endblock %}

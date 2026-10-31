@@ -18,11 +18,9 @@ class MessageSerializer(serializers.ModelSerializer):
 
 class ConversationSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(source="uid", read_only=True)
-    company = serializers.CharField(source="company.name", read_only=True, default=None)
     created_by = serializers.CharField(source="created_by.full_name", read_only=True, default="")
     assigned_to = serializers.CharField(source="assigned_to.full_name", read_only=True, default="")
     order = serializers.SerializerMethodField()
-    quote = serializers.SerializerMethodField()
     unread_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
@@ -30,12 +28,11 @@ class ConversationSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "subject",
+            "topic",
             "status",
-            "company",
             "created_by",
             "assigned_to",
             "order",
-            "quote",
             "last_message_at",
             "last_message_preview",
             "message_count",
@@ -46,15 +43,12 @@ class ConversationSerializer(serializers.ModelSerializer):
     def get_order(self, obj):
         return {"id": str(obj.order.uid), "number": obj.order.number} if obj.order_id else None
 
-    def get_quote(self, obj):
-        return {"id": str(obj.quote.uid), "number": obj.quote.number} if obj.quote_id else None
-
 
 class StartConversationSerializer(serializers.Serializer):
     subject = serializers.CharField(max_length=160, required=False, allow_blank=True, default="")
     body = serializers.CharField(max_length=4000)
     order = serializers.UUIDField(required=False, allow_null=True)
-    quote = serializers.UUIDField(required=False, allow_null=True)
+    topic = serializers.CharField(max_length=20, required=False, allow_blank=True, default="")
 
 
 class PostMessageSerializer(serializers.Serializer):

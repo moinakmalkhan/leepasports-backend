@@ -7,8 +7,10 @@ from apps.core.models import UUIDModel
 class Notification(UUIDModel):
     class Kind(models.TextChoices):
         ORDER = "order", "Order"
-        QUOTE = "quote", "Quote"
+        RETURN = "return", "Return"
         PAYMENT = "payment", "Payment"
+        PROMO = "promo", "Promotion"
+        REVIEW = "review", "Review"
         ACCOUNT = "account", "Account"
         CHAT = "chat", "Chat"
         SYSTEM = "system", "System"
@@ -20,7 +22,6 @@ class Notification(UUIDModel):
         ERROR = "error", "Error"
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="notifications")
-    company = models.ForeignKey("accounts.Company", null=True, blank=True, on_delete=models.CASCADE, related_name="+")
     kind = models.CharField(max_length=10, choices=Kind.choices, default=Kind.SYSTEM)
     level = models.CharField(max_length=8, choices=Level.choices, default=Level.INFO)
     title = models.CharField(max_length=160)

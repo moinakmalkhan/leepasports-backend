@@ -5,29 +5,25 @@ from apps.core.models import UUIDModel
 
 
 class BankAccount(models.Model):
-    """Wire instructions shown to buyers paying by bank transfer."""
+    """Shown to customers paying by bank transfer / Raast / wallet."""
 
-    label = models.CharField(max_length=80)
+    label = models.CharField(max_length=80, help_text="e.g. Meezan Bank, JazzCash")
     bank_name = models.CharField(max_length=120)
     account_name = models.CharField(max_length=120)
     account_number = models.CharField(max_length=64)
     iban = models.CharField(max_length=64, blank=True)
-    swift = models.CharField(max_length=20, blank=True)
-    currency = models.CharField(max_length=3, default="USD")
-    branch_address = models.CharField(max_length=200, blank=True)
+    instructions = models.CharField(max_length=200, blank=True, help_text="e.g. Send the screenshot on WhatsApp")
     is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ("sort_order",)
 
     def __str__(self):
-        return f"{self.label} ({self.currency})"
+        return self.label
 
 
 class Payment(UUIDModel):
-    class Kind(models.TextChoices):
-        FULL = "full", "Full payment"
-        DEPOSIT = "deposit", "Deposit"
-        BALANCE = "balance", "Balance"
-        INVOICE = "invoice", "Invoice (net terms)"
-
     class Status(models.TextChoices):
         PENDING = "pending", "Awaiting payment"
         SUBMITTED = "submitted", "Proof submitted"
@@ -36,22 +32,22 @@ class Payment(UUIDModel):
         REFUNDED = "refunded", "Refunded"
 
     order = models.ForeignKey("orders.Order", on_delete=models.CASCADE, related_name="payments")
-    kind = models.CharField(max_length=10, choices=Kind.choices, default=Kind.FULL)
-    method = models.CharField(max_length=16)
+    method = models.CharField(max_length=14)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
-    currency = models.CharField(max_length=3)
-    reference = models.CharField(max_length=120, blank=True, help_text="Bank reference / transaction id")
-    proof = models.FileField(upload_to="payments/proofs/%Y/%m/", blank=True)
-    note = models.CharField(max_length=500, blank=True)
-    due_date = models.DateField(null=True, blank=True)
+    currency = models.CharField(max_length=3, default=settings.DEFAULT_CURRENCY)
+    reference = models.CharField(max_length=120, blank=True, help_text="Transaction id / sender name")
+    proof = models.ImageField(upload_to="payments/proofs/%Y/%m/", blank=True)
+    provider = models.CharField(max_length=30, blank=True, help_text="Gateway name for card/wallet payments")
+    provider_ref = models.CharField(max_length=120, blank=True)
+    note = models.CharField(max_length=300, blank=True)
     submitted_at = models.DateTimeField(null=True, blank=True)
     confirmed_at = models.DateTimeField(null=True, blank=True)
     confirmed_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
 
     class Meta:
         ordering = ("-created_at",)
-        indexes = [models.Index(fields=["order", "status"]), models.Index(fields=["status", "due_date"])]
+        indexes = [models.Index(fields=["order", "status"]), models.Index(fields=["status", "-created_at"])]
 
     def __str__(self):
-        return f"{self.order.number} {self.kind} {self.amount} {self.currency}"
+        return f"{self.order_id} {self.method} {self.amount}"

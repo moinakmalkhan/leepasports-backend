@@ -11,14 +11,23 @@ from unfold.widgets import (
 
 
 class ShipOrderForm(BaseDialogForm):
-    carrier = forms.CharField(max_length=60, widget=UnfoldAdminTextInputWidget)
+    carrier = forms.ChoiceField(
+        choices=[
+            ("TCS", "TCS"),
+            ("Leopards", "Leopards Courier"),
+            ("M&P", "M&P"),
+            ("Trax", "Trax"),
+            ("PostEx", "PostEx"),
+            ("BlueEx", "BlueEx"),
+            ("Other", "Other"),
+        ],
+        widget=UnfoldAdminSelectWidget,
+    )
     tracking_number = forms.CharField(max_length=100, widget=UnfoldAdminTextInputWidget)
     tracking_url = forms.URLField(required=False, widget=UnfoldAdminURLInputWidget)
+    estimated_delivery = forms.DateField(required=False, widget=UnfoldAdminTextInputWidget(attrs={"type": "date"}))
     note = forms.CharField(
-        required=False,
-        max_length=500,
-        widget=UnfoldAdminTextareaWidget(attrs={"rows": 2}),
-        help_text="Shown to the customer in the timeline.",
+        required=False, max_length=500, widget=UnfoldAdminTextareaWidget(attrs={"rows": 2}), help_text="Shown to the customer."
     )
 
 
@@ -35,62 +44,6 @@ class CancelOrderForm(BaseDialogForm):
     reason = forms.CharField(max_length=300, widget=UnfoldAdminTextareaWidget(attrs={"rows": 3}))
 
 
-class QuoteRespondForm(BaseDialogForm):
-    message = forms.CharField(
-        required=False,
-        max_length=3000,
-        widget=UnfoldAdminTextareaWidget(attrs={"rows": 4}),
-        help_text="Shown to the customer with the quote.",
-    )
-    valid_days = forms.IntegerField(min_value=1, max_value=120, initial=14, widget=UnfoldAdminIntegerFieldWidget)
-    discount_percent = forms.DecimalField(
-        required=False,
-        min_value=0,
-        max_value=60,
-        decimal_places=2,
-        max_digits=5,
-        widget=UnfoldAdminDecimalFieldWidget,
-        help_text="Optional: apply this discount to every line that has no quoted price yet.",
-    )
-
-
-class FabricPriceAdjustForm(BaseDialogForm):
-    percent = forms.DecimalField(
-        decimal_places=2,
-        max_digits=6,
-        widget=UnfoldAdminDecimalFieldWidget,
-        help_text="e.g. 4.5 raises prices by 4.5 %, -3 lowers them by 3 %.",
-    )
-
-
-class CompanyTermsForm(BaseDialogForm):
-    payment_terms = forms.ChoiceField(widget=UnfoldAdminSelectWidget)
-    credit_limit = forms.DecimalField(min_value=0, decimal_places=2, max_digits=12, widget=UnfoldAdminDecimalFieldWidget)
-    approval_threshold = forms.DecimalField(
-        min_value=0, decimal_places=2, max_digits=12, widget=UnfoldAdminDecimalFieldWidget, required=False
-    )
-    customer_group = forms.ChoiceField(required=False, widget=UnfoldAdminSelectWidget)
-    is_verified = forms.BooleanField(required=False, initial=True)
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        from apps.accounts.models import Company
-        from apps.pricing.models import CustomerGroup
-
-        self.fields["payment_terms"].choices = Company.PaymentTerms.choices
-        self.fields["customer_group"].choices = [("", "— keep —")] + [(g.pk, g.name) for g in CustomerGroup.objects.all()]
-        if self.object_id:
-            company = Company.objects.filter(pk=self.object_id).first()
-            if company and not self.is_bound:
-                self.initial.update(
-                    payment_terms=company.payment_terms,
-                    credit_limit=company.credit_limit,
-                    approval_threshold=company.approval_threshold,
-                    customer_group=company.customer_group_id or "",
-                    is_verified=company.is_verified,
-                )
-
-
 class ConfirmPaymentForm(BaseDialogForm):
     amount = forms.DecimalField(
         required=False,
@@ -98,6 +51,56 @@ class ConfirmPaymentForm(BaseDialogForm):
         decimal_places=2,
         max_digits=12,
         widget=UnfoldAdminDecimalFieldWidget,
-        help_text="Leave blank to confirm the full expected amount.",
+        help_text="Leave blank to confirm the full amount.",
     )
     reference = forms.CharField(required=False, max_length=120, widget=UnfoldAdminTextInputWidget)
+
+
+class StockAdjustForm(BaseDialogForm):
+    delta = forms.IntegerField(widget=UnfoldAdminIntegerFieldWidget, help_text="Positive to add stock, negative to remove.")
+    reason = forms.CharField(required=False, max_length=120, widget=UnfoldAdminTextInputWidget)
+
+
+class PriceAdjustForm(BaseDialogForm):
+    percent = forms.DecimalField(
+        decimal_places=2,
+        max_digits=6,
+        widget=UnfoldAdminDecimalFieldWidget,
+        help_text="e.g. -20 puts the selected products 20% on sale (original price kept as compare-at).",
+    )
+
+
+class ResolveReturnForm(BaseDialogForm):
+    status = forms.ChoiceField(
+        choices=[
+            ("approved", "Approve"),
+            ("received", "Mark received"),
+            ("completed", "Complete (refund / exchange done)"),
+            ("rejected", "Reject"),
+        ],
+        widget=UnfoldAdminSelectWidget,
+    )
+    refund_amount = forms.DecimalField(
+        required=False, min_value=0, decimal_places=2, max_digits=12, widget=UnfoldAdminDecimalFieldWidget
+    )
+    refund_method = forms.ChoiceField(
+        required=False,
+        choices=[
+            ("", "—"),
+            ("bank transfer", "Bank transfer"),
+            ("JazzCash/EasyPaisa", "JazzCash / EasyPaisa"),
+            ("store credit", "Store credit"),
+            ("original method", "Original method"),
+        ],
+        widget=UnfoldAdminSelectWidget,
+    )
+    staff_notes = forms.CharField(
+        required=False,
+        max_length=1000,
+        widget=UnfoldAdminTextareaWidget(attrs={"rows": 3}),
+        help_text="Shown to the customer if rejected.",
+    )
+
+
+class ReviewReplyForm(BaseDialogForm):
+    reply = forms.CharField(max_length=1000, widget=UnfoldAdminTextareaWidget(attrs={"rows": 3}))

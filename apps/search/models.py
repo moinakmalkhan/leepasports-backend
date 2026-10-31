@@ -9,7 +9,6 @@ class SearchQuery(models.Model):
     normalized = models.CharField(max_length=200, db_index=True)
     result_count = models.PositiveIntegerField(default=0)
     user = models.ForeignKey("accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
-    company = models.ForeignKey("accounts.Company", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

@@ -1,0 +1,9 @@
+{% extends "email/base.html" %}{% block content %}
+<h1 style="margin:0 0 12px;font-size:22px;">{{ return_request.get_kind_display }} · {{ return_request.get_status_display }}</h1>
+<p style="line-height:1.6;color:#44403c;">Request <strong>{{ return_request.number }}</strong> for order <strong>{{ order.number }}</strong>.</p>
+<ul style="color:#44403c;line-height:1.7;">{% for item in items %}<li>{{ item.order_item.product_name }} ({{ item.order_item.variant_label }}) × {{ item.quantity }}</li>{% endfor %}</ul>
+{% if return_request.status == "approved" %}<p style="line-height:1.6;color:#44403c;">Please pack the items unworn with tags attached. We'll arrange pickup or send you the return address shortly.</p>{% endif %}
+{% if return_request.status == "completed" and return_request.kind == "refund" %}<p style="line-height:1.6;color:#44403c;">Refund of <strong>Rs {{ return_request.refund_amount|floatformat:0 }}</strong> via {{ return_request.refund_method|default:"your original payment method" }}.</p>{% endif %}
+{% if return_request.staff_notes and return_request.status == "rejected" %}<p style="line-height:1.6;color:#44403c;">{{ return_request.staff_notes }}</p>{% endif %}
+{% include "email/_button.html" with label="View order" %}
+{% endblock %}

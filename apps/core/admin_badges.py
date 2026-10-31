@@ -1,4 +1,4 @@
-"""Sidebar badge counters (cached 60 s so the sidebar never costs a query burst)."""
+"""Sidebar badge counters (cached 60 s)."""
 
 from django.conf import settings
 from django.core.cache import cache
@@ -12,20 +12,10 @@ def _cached(key, fn, timeout=60):
     return value or None
 
 
-def open_orders(request):
+def new_orders(request):
     from apps.orders.models import Order
 
-    return _cached(
-        "badge:orders", lambda: Order.objects.filter(status__in=[Order.Status.PENDING_PAYMENT, Order.Status.CONFIRMED]).count()
-    )
-
-
-def pending_quotes(request):
-    from apps.quotes.models import Quote
-
-    return _cached(
-        "badge:quotes", lambda: Quote.objects.filter(status__in=[Quote.Status.SUBMITTED, Quote.Status.UNDER_REVIEW]).count()
-    )
+    return _cached("badge:orders", lambda: Order.objects.filter(status=Order.Status.PENDING).count())
 
 
 def payments_to_confirm(request):
@@ -34,17 +24,39 @@ def payments_to_confirm(request):
     return _cached("badge:payments", lambda: Payment.objects.filter(status=Payment.Status.SUBMITTED).count())
 
 
+def open_returns(request):
+    from apps.orders.models import ReturnRequest
+
+    return _cached(
+        "badge:returns",
+        lambda: ReturnRequest.objects.filter(
+            status__in=[ReturnRequest.Status.REQUESTED, ReturnRequest.Status.APPROVED, ReturnRequest.Status.RECEIVED]
+        ).count(),
+    )
+
+
+def pending_reviews(request):
+    from apps.reviews.models import Review
+
+    return _cached("badge:reviews", lambda: Review.objects.filter(status=Review.Status.PENDING).count())
+
+
 def open_conversations(request):
     from apps.chat.models import Conversation
 
     return _cached("badge:chat", lambda: Conversation.objects.filter(status=Conversation.Status.OPEN).count())
 
 
-def unverified_companies(request):
-    from apps.accounts.models import Company
+def low_stock(request):
+    from apps.catalog.models import ProductVariant
 
-    return _cached("badge:companies", lambda: Company.objects.filter(is_verified=False, is_active=True).count())
+    return _cached(
+        "badge:stock",
+        lambda: ProductVariant.objects.filter(
+            is_active=True, stock__lte=settings.SHOP["LOW_STOCK_THRESHOLD"], product__is_active=True
+        ).count(),
+    )
 
 
 def environment(request):
-    return ["Development", "warning"] if settings.DEBUG else ["Production", "success"]
+    return ["Development", "warning"] if settings.DEBUG else ["Live", "success"]

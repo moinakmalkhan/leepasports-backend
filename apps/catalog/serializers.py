@@ -1,9 +1,9 @@
 from rest_framework import serializers
 
 from apps.core.serializers import MoneyField
-from apps.pricing.services import fabric_cost
+from apps.core.translation import TranslatedSerializerMixin
 
-from .models import Fabric, Product, ProductFabricOption, ProductImage, ProductSizeOption, Size, SizeGroup
+from .models import Collection, Product, ProductImage, ProductVariant, Size, SizeGroup, StockAlert
 
 
 class CategoryNodeSerializer(serializers.Serializer):
@@ -15,51 +15,33 @@ class CategoryNodeSerializer(serializers.Serializer):
     description = serializers.CharField(allow_blank=True)
     product_count = serializers.IntegerField()
     depth = serializers.IntegerField()
+    show_in_menu = serializers.BooleanField()
     children = serializers.ListField(child=serializers.DictField())
 
 
-class FabricSerializer(serializers.ModelSerializer):
+class CollectionSerializer(TranslatedSerializerMixin, serializers.ModelSerializer):
     id = serializers.UUIDField(source="uid", read_only=True)
-    price_pkr = MoneyField(read_only=True)
+    product_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
-        model = Fabric
-        fields = (
-            "id",
-            "name",
-            "slug",
-            "composition",
-            "gsm",
-            "quality",
-            "quality_rank",
-            "price_pkr",
-            "price_unit",
-            "width_inches",
-            "description",
-            "features",
-            "best_for",
-            "typical_mills",
-            "is_available_in_pakistan",
-            "image",
-            "swatch_color",
-            "price_updated_at",
-        )
+        model = Collection
+        fields = ("id", "name", "slug", "tagline", "description", "image", "is_featured", "product_count", "starts_at", "ends_at")
+        translated_fields = ("name", "tagline", "description")
 
 
 class ProductImageSerializer(serializers.ModelSerializer):
     url = serializers.ImageField(source="image", read_only=True)
+    color = serializers.SlugRelatedField(slug_field="slug", read_only=True)
 
     class Meta:
         model = ProductImage
-        fields = ("id", "url", "alt", "is_primary", "width", "height")
+        fields = ("id", "url", "alt", "color", "is_primary", "width", "height")
 
 
 class SizeSerializer(serializers.ModelSerializer):
-    surcharge_percent = MoneyField(max_digits=5, read_only=True)
-
     class Meta:
         model = Size
-        fields = ("id", "label", "sort_order", "surcharge_percent", "chest_cm", "length_cm")
+        fields = ("id", "label", "sort_order")
 
 
 class SizeGroupSerializer(serializers.ModelSerializer):
@@ -67,19 +49,50 @@ class SizeGroupSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SizeGroup
-        fields = ("id", "name", "slug", "sizes")
+        fields = ("id", "name", "slug", "sizes", "guide")
 
 
-class ProductCardSerializer(serializers.ModelSerializer):
-    """Compact representation for grids, search dropdowns and recommendations."""
+class VariantSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(source="uid", read_only=True)
+    color = serializers.SerializerMethodField()
+    size = serializers.CharField(source="size.label", read_only=True, default=None)
+    size_id = serializers.IntegerField(read_only=True)
+    price = MoneyField(read_only=True)
+    label = serializers.CharField(read_only=True)
+    in_stock = serializers.BooleanField(read_only=True)
+    low_stock = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProductVariant
+        fields = ("id", "sku", "color", "size", "size_id", "price", "stock", "in_stock", "low_stock", "label")
+
+    def get_color(self, obj):
+        from apps.core.i18n import translate
+
+        return {"name": translate(obj.color, "name"), "slug": obj.color.slug, "hex": obj.color.hex} if obj.color_id else None
+
+    def get_low_stock(self, obj):
+        from django.conf import settings
+
+        return 0 < obj.stock <= settings.SHOP["LOW_STOCK_THRESHOLD"]
+
+
+class ProductCardSerializer(TranslatedSerializerMixin, serializers.ModelSerializer):
+    """Grid / search / recommendation card."""
 
     id = serializers.UUIDField(source="uid", read_only=True)
     category = serializers.SlugRelatedField(slug_field="slug", read_only=True)
-    category_name = serializers.CharField(source="category.name", read_only=True)
+    category_name = serializers.SerializerMethodField()
     image = serializers.SerializerMethodField()
-    base_price = MoneyField(read_only=True)
+    hover_image = serializers.SerializerMethodField()
+    price = MoneyField(read_only=True)
     compare_at_price = MoneyField(read_only=True)
-    base_fabric = serializers.CharField(source="base_fabric.name", read_only=True)
+    discount_percent = serializers.IntegerField(read_only=True)
+    is_on_sale = serializers.BooleanField(read_only=True)
+    in_stock = serializers.BooleanField(read_only=True)
+    rating_avg = serializers.DecimalField(max_digits=3, decimal_places=2, coerce_to_string=False, read_only=True)
+    colors = serializers.SerializerMethodField()
+    sizes = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -88,24 +101,33 @@ class ProductCardSerializer(serializers.ModelSerializer):
             "name",
             "slug",
             "sku",
+            "brand",
+            "gender",
             "category",
             "category_name",
             "short_description",
             "image",
-            "base_price",
+            "hover_image",
+            "price",
             "compare_at_price",
-            "min_order_quantity",
-            "lead_time_days",
-            "genders",
+            "discount_percent",
+            "is_on_sale",
+            "in_stock",
+            "rating_avg",
+            "rating_count",
             "colors",
-            "base_fabric",
+            "sizes",
             "is_featured",
             "is_new",
-            "is_customizable",
         )
+        translated_fields = ("name", "short_description")
 
-    def get_image(self, obj):
-        image = obj.primary_image
+    def get_category_name(self, obj):
+        from apps.core.i18n import translate
+
+        return translate(obj.category, "name")
+
+    def _img(self, image, obj):
         if not image:
             return None
         request = self.context.get("request")
@@ -117,72 +139,73 @@ class ProductCardSerializer(serializers.ModelSerializer):
             "height": image.height,
         }
 
+    def get_image(self, obj):
+        return self._img(obj.primary_image, obj)
 
-class FabricOptionSerializer(serializers.ModelSerializer):
-    fabric = FabricSerializer(read_only=True)
-    price_adjustment = MoneyField(read_only=True)
-    unit_fabric_cost = serializers.SerializerMethodField()
+    def get_hover_image(self, obj):
+        images = getattr(obj, "all_images", None) or []
+        return self._img(images[1], obj) if len(images) > 1 else None
 
-    class Meta:
-        model = ProductFabricOption
-        fields = ("fabric", "price_adjustment", "is_default", "unit_fabric_cost")
+    def get_colors(self, obj):
+        seen = {}
+        for v in getattr(obj, "active_variants", []):
+            if v.color_id and v.color.slug not in seen:
+                from apps.core.i18n import translate
 
-    def get_unit_fabric_cost(self, obj):
-        product = self.context.get("product")
-        currency = self.context.get("currency")
-        if not product:
-            return None
-        return fabric_cost(obj.fabric, product.fabric_consumption_kg, currency) + obj.price_adjustment
+                seen[v.color.slug] = {"name": translate(v.color, "name"), "slug": v.color.slug, "hex": v.color.hex}
+        return list(seen.values())
 
-
-class SizeOptionSerializer(serializers.ModelSerializer):
-    size = SizeSerializer(read_only=True)
-
-    class Meta:
-        model = ProductSizeOption
-        fields = ("gender", "size")
+    def get_sizes(self, obj):
+        labels = []
+        for v in sorted(getattr(obj, "active_variants", []), key=lambda v: v.size.sort_order if v.size_id else 0):
+            if v.size_id and v.size.label not in labels and v.stock > 0:
+                labels.append(v.size.label)
+        return labels
 
 
 class ProductDetailSerializer(ProductCardSerializer):
-    images = ProductImageSerializer(many=True, read_only=True)
-    fabric_options = serializers.SerializerMethodField()
-    size_options = SizeOptionSerializer(many=True, read_only=True)
+    images = ProductImageSerializer(source="all_images", many=True, read_only=True)
+    variants = VariantSerializer(source="active_variants", many=True, read_only=True)
     size_group = SizeGroupSerializer(read_only=True)
-    labor_price = MoneyField(read_only=True)
-    volume_tiers = serializers.SerializerMethodField()
+    collections = CollectionSerializer(many=True, read_only=True)
     breadcrumbs = serializers.SerializerMethodField()
 
     class Meta(ProductCardSerializer.Meta):
         fields = ProductCardSerializer.Meta.fields + (
             "description",
+            "material",
+            "care_instructions",
             "specifications",
             "tags",
             "images",
-            "fabric_options",
-            "size_options",
+            "variants",
             "size_group",
-            "labor_price",
-            "fabric_consumption_kg",
-            "order_increment",
-            "is_made_to_order",
-            "stock_quantity",
-            "customization_options",
-            "volume_tiers",
+            "collections",
+            "weight_grams",
+            "total_stock",
             "breadcrumbs",
             "meta_title",
             "meta_description",
         )
-
-    def get_fabric_options(self, obj):
-        ctx = {**self.context, "product": obj}
-        return FabricOptionSerializer(obj.fabric_options.all(), many=True, context=ctx).data
-
-    def get_volume_tiers(self, obj):
-        from apps.pricing.services import volume_tiers_for
-
-        return [{"min_quantity": t.min_quantity, "discount_percent": t.discount_percent} for t in volume_tiers_for(obj)]
+        translated_fields = (
+            "name",
+            "short_description",
+            "description",
+            "material",
+            "care_instructions",
+            "meta_title",
+            "meta_description",
+        )
 
     def get_breadcrumbs(self, obj):
         from .services import category_breadcrumbs
 
         return category_breadcrumbs(obj.category)
+
+
+class StockAlertSerializer(serializers.ModelSerializer):
+    variant = serializers.SlugRelatedField(slug_field="uid", queryset=ProductVariant.objects.filter(is_active=True))
+
+    class Meta:
+        model = StockAlert
+        fields = ("variant", "email")

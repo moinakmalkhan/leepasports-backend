@@ -6,163 +6,199 @@ from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 
-from apps.accounts.models import Address, Company, CompanyMember
+from apps.accounts.models import Address, User
 from apps.cart import services as cart_services
-from apps.catalog.models import Product
+from apps.catalog.models import Product, ProductVariant
 from apps.core.exceptions import BusinessError
 from apps.core.utils import after_commit, generate_number, money
 from apps.notifications.events import emit
 
-from .models import Order, OrderItem, OrderStatusHistory, ShippingMethod
-
-NET_DAYS = {"net_15": 15, "net_30": 30, "net_60": 60}
+from .models import Order, OrderItem, OrderStatusHistory, ReturnItem, ReturnRequest, ShippingZone
 
 
-def _needs_approval(company: Company, membership: CompanyMember, subtotal: Decimal) -> bool:
-    if membership.role in CompanyMember.CAN_APPROVE:
-        return False
-    limit = membership.order_limit or company.approval_threshold
-    return bool(limit and subtotal > limit)
+# ---------------------------------------------------------------------------
+# Shipping
+# ---------------------------------------------------------------------------
+def resolve_zone(city: str, province: str = "") -> ShippingZone | None:
+    zones = list(ShippingZone.objects.filter(is_active=True))
+    city_l, prov_l = (city or "").strip().lower(), (province or "").strip().lower()
+    for z in zones:
+        if city_l and city_l in [c.lower() for c in z.cities]:
+            return z
+    for z in zones:
+        if prov_l and prov_l in [p.lower() for p in z.provinces]:
+            return z
+    return next((z for z in zones if z.is_default), zones[0] if zones else None)
 
 
-def _validate_payment_method(company: Company, method: str, total: Decimal):
-    if method == Order.PaymentMethod.NET_TERMS:
-        if not company.allows_net_terms:
-            raise BusinessError("Net terms are not enabled for your company yet. Choose bank transfer or contact sales.")
-        if company.credit_limit and company.credit_available < total:
-            raise BusinessError(
-                f"This order exceeds your available credit ({company.currency} {company.credit_available:,.2f}). "
-                "Reduce the order or pay by bank transfer."
-            )
-    elif method == Order.PaymentMethod.CARD:
-        raise BusinessError("Card payments are coming soon. Please use bank transfer.")
+def shipping_quote(
+    *, subtotal: Decimal, city: str, province: str = "", payment_method: str = "cod", free_shipping: bool = False
+) -> dict:
+    zone = resolve_zone(city, province)
+    if not zone:
+        return {
+            "zone": None,
+            "rate": Decimal("0"),
+            "cod_fee": Decimal("0"),
+            "min_days": 3,
+            "max_days": 7,
+            "free_over": None,
+            "is_free": True,
+        }
+    is_free = free_shipping or (zone.free_over is not None and subtotal >= zone.free_over)
+    cod_fee = money(zone.cod_fee) if payment_method == Order.PaymentMethod.COD else Decimal("0")
+    return {
+        "zone": zone,
+        "rate": Decimal("0") if is_free else money(zone.rate),
+        "cod_fee": cod_fee,
+        "min_days": zone.min_days,
+        "max_days": zone.max_days,
+        "free_over": zone.free_over,
+        "is_free": is_free,
+    }
 
 
-def _cart_weight_kg(items) -> Decimal:
-    grams = sum((item.product.weight_grams or 250) * item.quantity for item in items)
-    return Decimal(grams) / Decimal(1000)
-
-
+# ---------------------------------------------------------------------------
+# Checkout
+# ---------------------------------------------------------------------------
 @transaction.atomic
 def checkout(
     *,
     request,
-    shipping_address_uid,
-    billing_address_uid=None,
-    shipping_method_code,
-    payment_method,
-    po_number="",
-    customer_notes="",
-    requested_delivery_date=None,
+    address: dict,
+    payment_method: str,
+    email: str,
+    phone: str,
+    notes: str = "",
+    save_address: bool = False,
+    is_gift: bool = False,
 ) -> Order:
-    company: Company = request.company
-    membership: CompanyMember = request.membership
-    if not membership.can_order:
-        raise BusinessError("Your role does not allow placing orders. Ask a company admin.")
-    if not request.user.is_email_verified:
-        raise BusinessError("Please verify your email address before placing an order.")
-
+    user = request.user if request.user.is_authenticated else None
     cart = cart_services.get_or_create_cart(request)
-    cart_services.validate_products_available(cart)
-    totals = cart_services.reprice_cart(cart, company)
-    items = totals["items"]
-    if not items:
-        raise BusinessError("Your cart is empty.")
-    for item in items:
-        if "error" in item.price_breakdown:
-            raise BusinessError(f"{item.product.name}: {item.price_breakdown['error']}")
+    totals = cart_services.compute_totals(cart, user=user, email=email)
+    hard_issues = [i.issue for i in totals.items if i.issue and "reduced" not in i.issue]
+    if hard_issues:
+        raise BusinessError(hard_issues[0])
+    lines = [i for i in totals.items if not i.issue or "reduced" in i.issue]
+    if not lines:
+        raise BusinessError("Your bag is empty.")
+    if payment_method == Order.PaymentMethod.CARD:
+        raise BusinessError("Card payments are coming soon — please choose cash on delivery or bank transfer.")
 
-    shipping = Address.objects.filter(company=company, uid=shipping_address_uid).first()
-    if not shipping:
-        raise BusinessError("Select a shipping address.")
-    billing = Address.objects.filter(company=company, uid=billing_address_uid).first() if billing_address_uid else shipping
-    method = ShippingMethod.objects.filter(code=shipping_method_code, is_active=True).first()
-    if not method:
-        raise BusinessError("Select a shipping method.")
+    quote = shipping_quote(
+        subtotal=totals.subtotal - totals.discount,
+        city=address["city"],
+        province=address.get("province", ""),
+        payment_method=payment_method,
+        free_shipping=totals.free_shipping,
+    )
+    grand = money(totals.subtotal - totals.discount + quote["rate"] + quote["cod_fee"])
 
-    subtotal = totals["subtotal"]
-    shipping_total = method.estimate(_cart_weight_kg(items))
-    grand_total = money(subtotal + shipping_total)
-    _validate_payment_method(company, payment_method, grand_total)
-
-    # Lock the company row so concurrent orders cannot both pass the credit check.
-    company = Company.objects.select_for_update().get(pk=company.pk)
-
-    needs_approval = _needs_approval(company, membership, subtotal)
-    if needs_approval:
-        status = Order.Status.PENDING_APPROVAL
-    elif payment_method == Order.PaymentMethod.NET_TERMS:
-        status = Order.Status.CONFIRMED
-    else:
-        status = Order.Status.PENDING_PAYMENT
-
-    due_date = None
-    if payment_method == Order.PaymentMethod.NET_TERMS:
-        due_date = timezone.localdate() + timedelta(days=NET_DAYS.get(company.payment_terms, 30))
+    # Lock variants in a stable order and take stock atomically.
+    variant_ids = sorted(i.variant.pk for i in lines)
+    # order_by(pk) drops the model's default colour/size ordering joins (FOR UPDATE can't lock outer joins).
+    locked = {v.pk: v for v in ProductVariant.objects.select_for_update().filter(pk__in=variant_ids).order_by("pk")}
+    for line in lines:
+        v = locked[line.variant.pk]
+        qty = min(line.item.quantity, line.available)
+        if qty <= 0 or v.stock < qty:
+            raise BusinessError(f"{v.product.name} ({v.label}) just sold out. Please update your bag.")
 
     order = Order.objects.create(
-        number=generate_number(settings.LEEPA["ORDER_NUMBER_PREFIX"]),
-        company=company,
-        placed_by=request.user,
-        status=status,
+        number=generate_number(settings.SHOP["ORDER_NUMBER_PREFIX"]),
+        user=user,
+        email=email.lower(),
+        phone=phone,
+        status=Order.Status.PENDING,
+        payment_status=Order.PaymentStatus.COD_PENDING
+        if payment_method == Order.PaymentMethod.COD
+        else Order.PaymentStatus.UNPAID,
         payment_method=payment_method,
-        payment_terms=company.payment_terms,
-        po_number=po_number[:64],
-        currency=cart.currency,
-        subtotal=subtotal,
-        discount_total=totals["savings"],
-        shipping_total=shipping_total,
-        grand_total=grand_total,
-        total_quantity=totals["quantity"],
-        shipping_method=method,
-        shipping_address=shipping.as_snapshot(),
-        billing_address=billing.as_snapshot(),
-        customer_notes=customer_notes[:2000],
-        requested_delivery_date=requested_delivery_date,
-        due_date=due_date,
-        confirmed_at=timezone.now() if status == Order.Status.CONFIRMED else None,
-        estimated_ship_date=timezone.localdate() + timedelta(days=max((i.product.lead_time_days for i in items), default=21)),
+        subtotal=totals.subtotal,
+        discount_total=totals.discount,
+        shipping_total=quote["rate"],
+        cod_fee=quote["cod_fee"],
+        grand_total=grand,
+        total_quantity=sum(min(i.item.quantity, i.available) for i in lines),
+        coupon_code=totals.coupon_code,
+        shipping_zone=quote["zone"],
+        shipping_address=address,
+        customer_notes=notes[:500],
+        is_gift=is_gift,
+        estimated_delivery=timezone.localdate() + timedelta(days=quote["max_days"]),
     )
-    OrderItem.objects.bulk_create(
-        [
+    items = []
+    for line in lines:
+        v = locked[line.variant.pk]
+        qty = min(line.item.quantity, line.available)
+        v.stock -= qty
+        v.save(update_fields=["stock", "updated_at"])
+        image = v.product.primary_image
+        items.append(
             OrderItem(
                 order=order,
-                product=item.product,
-                fabric=item.fabric,
-                product_name=item.product.name,
-                sku=item.product.sku,
-                fabric_name=item.fabric.name,
-                image_url=(item.product.primary_image.image.url if item.product.primary_image else ""),
-                breakdown=item.breakdown,
-                quantity=item.quantity,
-                color=item.color,
-                customization=item.customization,
-                artwork=item.artwork,
-                notes=item.notes,
-                unit_price=item.unit_price,
-                line_total=item.line_total,
-                price_breakdown=item.price_breakdown,
+                variant=v,
+                product=v.product,
+                product_name=v.product.name,
+                variant_label=v.label,
+                sku=v.sku,
+                image_url=image.image.url if image else "",
+                quantity=qty,
+                unit_price=line.unit_price,
+                compare_at_price=v.product.compare_at_price,
+                line_total=money(line.unit_price * qty),
             )
-            for item in items
-        ]
-    )
-    OrderStatusHistory.objects.create(order=order, to_status=status, changed_by=request.user, note="Order placed")
+        )
+        Product.objects.filter(pk=v.product_id).update(sales_count=F("sales_count") + qty)
+    OrderItem.objects.bulk_create(items)
+    for pid in {i.product_id for i in items}:
+        from apps.catalog.services import refresh_total_stock
 
-    if payment_method == Order.PaymentMethod.NET_TERMS and status != Order.Status.PENDING_APPROVAL:
-        Company.objects.filter(pk=company.pk).update(credit_used=F("credit_used") + grand_total)
-    else:
+        refresh_total_stock(pid)
+    OrderStatusHistory.objects.create(order=order, to_status=order.status, changed_by=user, note="Order placed")
+
+    if totals.coupon_code and totals.discount >= 0:
+        from apps.promotions.models import Coupon, CouponRedemption
+
+        coupon = Coupon.objects.select_for_update().filter(code=totals.coupon_code).first()
+        if coupon:
+            CouponRedemption.objects.create(coupon=coupon, order=order, user=user, email=order.email, discount=totals.discount)
+            coupon.uses_count = F("uses_count") + 1
+            coupon.save(update_fields=["uses_count"])
+
+    if payment_method == Order.PaymentMethod.BANK_TRANSFER:
         from apps.payments.services import create_pending_payment
 
         create_pending_payment(order)
 
-    for item in items:
-        Product.objects.filter(pk=item.product_id).update(order_count=F("order_count") + item.quantity)
-    cart.items.all().delete()
+    if user:
+        if save_address and not Address.objects.filter(user=user, line1=address["line1"], city=address["city"]).exists():
+            Address.objects.create(
+                user=user,
+                **{
+                    k: v
+                    for k, v in address.items()
+                    if k in {"full_name", "phone", "line1", "line2", "city", "province", "postal_code", "country"}
+                },
+                is_default=not Address.objects.filter(user=user).exists(),
+            )
+        User.objects.filter(pk=user.pk).update(order_count=F("order_count") + 1, total_spent=F("total_spent") + grand)
 
+    cart.items.all().delete()
+    cart_services.remove_coupon(cart)
     after_commit(lambda: emit("order.placed", order_id=order.pk))
-    if needs_approval:
-        after_commit(lambda: emit("order.approval_requested", order_id=order.pk))
     return order
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle
+# ---------------------------------------------------------------------------
+STAMPS = {
+    Order.Status.CONFIRMED: "confirmed_at",
+    Order.Status.SHIPPED: "shipped_at",
+    Order.Status.DELIVERED: "delivered_at",
+    Order.Status.CANCELLED: "cancelled_at",
+}
 
 
 @transaction.atomic
@@ -171,18 +207,15 @@ def transition(order: Order, new_status: str, *, by=None, note: str = "", custom
     if not order.can_transition(new_status):
         raise BusinessError(f"Cannot move an order from '{order.get_status_display()}' to '{Order.Status(new_status).label}'.")
     old = order.status
-    now = timezone.now()
     order.status = new_status
-    stamps = {
-        Order.Status.CONFIRMED: "confirmed_at",
-        Order.Status.SHIPPED: "shipped_at",
-        Order.Status.DELIVERED: "delivered_at",
-        Order.Status.CANCELLED: "cancelled_at",
-    }
     update_fields = ["status", "updated_at"]
-    if new_status in stamps:
-        setattr(order, stamps[new_status], now)
-        update_fields.append(stamps[new_status])
+    if new_status in STAMPS:
+        setattr(order, STAMPS[new_status], timezone.now())
+        update_fields.append(STAMPS[new_status])
+    if new_status == Order.Status.DELIVERED and order.payment_method == Order.PaymentMethod.COD:
+        order.payment_status = Order.PaymentStatus.PAID
+        order.paid_at = timezone.now()
+        update_fields += ["payment_status", "paid_at"]
     for key, value in fields.items():
         setattr(order, key, value)
         update_fields.append(key)
@@ -194,48 +227,45 @@ def transition(order: Order, new_status: str, *, by=None, note: str = "", custom
     return order
 
 
-@transaction.atomic
-def approve(order: Order, *, by, membership: CompanyMember) -> Order:
-    if membership.role not in CompanyMember.CAN_APPROVE:
-        raise BusinessError("Only company admins or owners can approve orders.")
-    if order.status != Order.Status.PENDING_APPROVAL:
-        raise BusinessError("This order is not waiting for approval.")
-    target = Order.Status.CONFIRMED if order.payment_method == Order.PaymentMethod.NET_TERMS else Order.Status.PENDING_PAYMENT
-    if order.payment_method == Order.PaymentMethod.NET_TERMS:
-        Company.objects.filter(pk=order.company_id).update(credit_used=F("credit_used") + order.grand_total)
-    return transition(order, target, by=by, note=f"Approved by {by.full_name}", approved_by=by, approved_at=timezone.now())
+def _restock(order: Order):
+    from apps.catalog.services import refresh_total_stock
+
+    for item in order.items.select_related("variant"):
+        if item.variant_id:
+            ProductVariant.objects.filter(pk=item.variant_id).update(stock=F("stock") + item.quantity)
+            Product.objects.filter(pk=item.product_id).update(sales_count=F("sales_count") - item.quantity)
+            refresh_total_stock(item.product_id)
 
 
 @transaction.atomic
-def cancel(order: Order, *, by, reason: str = "") -> Order:
-    if order.status not in Order.CANCELLABLE_STATUSES:
-        raise BusinessError("This order is already in production and can no longer be cancelled online. Please contact us.")
-    if order.payment_method == Order.PaymentMethod.NET_TERMS and order.status != Order.Status.PENDING_APPROVAL:
-        Company.objects.filter(pk=order.company_id).update(credit_used=F("credit_used") - order.grand_total)
-    for item in order.items.all():
-        if item.product_id:
-            Product.objects.filter(pk=item.product_id).update(order_count=F("order_count") - item.quantity)
-    return transition(order, Order.Status.CANCELLED, by=by, note=reason or "Cancelled by customer", cancel_reason=reason[:300])
+def cancel(order: Order, *, by=None, reason: str = "", by_customer=True) -> Order:
+    if by_customer and order.status not in Order.CANCELLABLE_STATUSES:
+        raise BusinessError("This order is already being packed. Message us and we'll help.")
+    if order.status not in (*Order.CANCELLABLE_STATUSES, Order.Status.PROCESSING):
+        raise BusinessError("This order can no longer be cancelled.")
+    _restock(order)
+    if order.user_id:
+        User.objects.filter(pk=order.user_id).update(
+            order_count=F("order_count") - 1, total_spent=F("total_spent") - order.grand_total
+        )
+    fields = {"cancel_reason": reason[:300]}
+    if order.payment_status == Order.PaymentStatus.PAID:
+        fields["payment_status"] = Order.PaymentStatus.REFUNDED
+        fields["refunded_total"] = order.grand_total
+    return transition(
+        order, Order.Status.CANCELLED, by=by, note=reason or ("Cancelled by customer" if by_customer else "Cancelled"), **fields
+    )
 
 
 @transaction.atomic
 def reorder(order: Order, request) -> int:
     cart = cart_services.get_or_create_cart(request)
     added = 0
-    for item in order.items.select_related("product", "fabric"):
-        if not item.product or not item.product.is_active:
+    for item in order.items.select_related("variant"):
+        if not item.variant_id:
             continue
         try:
-            cart_services.add_item(
-                cart,
-                request.company,
-                product_slug=item.product.slug,
-                fabric_slug=item.fabric.slug if item.fabric else None,
-                breakdown=item.breakdown,
-                color=item.color,
-                customization=item.customization,
-                notes=item.notes,
-            )
+            cart_services.add_item(cart, variant_uid=item.variant.uid, quantity=item.quantity)
             added += 1
         except BusinessError:
             continue
@@ -243,19 +273,93 @@ def reorder(order: Order, request) -> int:
 
 
 @transaction.atomic
-def record_payment(order: Order, amount: Decimal):
-    """Called by payments when money is confirmed; updates status & payment flags."""
+def mark_paid(order: Order, *, by=None, amount: Decimal | None = None) -> Order:
     order = Order.objects.select_for_update().get(pk=order.pk)
-    order.amount_paid = money(order.amount_paid + amount)
-    if order.amount_paid >= order.grand_total:
-        order.payment_status = Order.PaymentStatus.PAID
-    elif order.amount_paid > 0:
-        order.payment_status = Order.PaymentStatus.DEPOSIT_PAID
-    order.save(update_fields=["amount_paid", "payment_status", "updated_at"])
-    if order.status == Order.Status.PENDING_PAYMENT and order.payment_status in (
-        Order.PaymentStatus.PAID,
-        Order.PaymentStatus.DEPOSIT_PAID,
-    ):
-        transition(order, Order.Status.CONFIRMED, note="Payment received")
-    after_commit(lambda: emit("order.payment_received", order_id=order.pk, amount=str(amount)))
+    order.payment_status = Order.PaymentStatus.PAID
+    order.paid_at = timezone.now()
+    order.save(update_fields=["payment_status", "paid_at", "updated_at"])
+    if order.status == Order.Status.PENDING:
+        transition(order, Order.Status.CONFIRMED, by=by, note="Payment received")
+    after_commit(lambda: emit("order.paid", order_id=order.pk))
     return order
+
+
+# ---------------------------------------------------------------------------
+# Returns
+# ---------------------------------------------------------------------------
+@transaction.atomic
+def request_return(order: Order, *, user, kind: str, reason: str, details: str, items: list[dict], image=None) -> ReturnRequest:
+    if not order.can_return:
+        raise BusinessError(f"Returns are accepted within {settings.SHOP['RETURN_WINDOW_DAYS']} days of delivery.")
+    order_items = {str(i.uid): i for i in order.items.all()}
+    if not items:
+        raise BusinessError("Select at least one item to return.")
+    req = ReturnRequest.objects.create(
+        number=generate_number(settings.SHOP["RETURN_NUMBER_PREFIX"]),
+        order=order,
+        user=user,
+        kind=kind,
+        reason=reason,
+        details=details[:2000],
+        image=image,
+    )
+    refund = Decimal("0")
+    for entry in items:
+        item = order_items.get(str(entry["order_item"]))
+        qty = int(entry.get("quantity", 1))
+        if not item or qty < 1 or qty > item.quantity - item.returned_quantity:
+            raise BusinessError("Invalid return quantity.")
+        exchange = None
+        if kind == ReturnRequest.Kind.EXCHANGE and entry.get("exchange_variant"):
+            exchange = ProductVariant.objects.filter(
+                uid=entry["exchange_variant"], product_id=item.product_id, is_active=True
+            ).first()
+        ReturnItem.objects.create(request=req, order_item=item, quantity=qty, exchange_variant=exchange)
+        refund += item.unit_price * qty
+    req.refund_amount = money(refund) if kind == ReturnRequest.Kind.REFUND else Decimal("0")
+    req.save(update_fields=["refund_amount"])
+    after_commit(lambda: emit("return.requested", return_id=req.pk))
+    return req
+
+
+@transaction.atomic
+def resolve_return(
+    req: ReturnRequest,
+    *,
+    status: str,
+    by=None,
+    staff_notes: str = "",
+    refund_amount: Decimal | None = None,
+    refund_method: str = "",
+) -> ReturnRequest:
+    req = ReturnRequest.objects.select_for_update().select_related("order").get(pk=req.pk)
+    req.status = status
+    req.staff_notes = staff_notes or req.staff_notes
+    if refund_amount is not None:
+        req.refund_amount = money(refund_amount)
+    if refund_method:
+        req.refund_method = refund_method
+    if status in (ReturnRequest.Status.COMPLETED, ReturnRequest.Status.REJECTED):
+        req.resolved_at = timezone.now()
+    req.save()
+    if status == ReturnRequest.Status.COMPLETED:
+        order = req.order
+        from apps.catalog.services import refresh_total_stock
+
+        for ri in req.items.select_related("order_item"):
+            OrderItem.objects.filter(pk=ri.order_item_id).update(returned_quantity=F("returned_quantity") + ri.quantity)
+            if ri.order_item.variant_id:
+                ProductVariant.objects.filter(pk=ri.order_item.variant_id).update(stock=F("stock") + ri.quantity)
+                refresh_total_stock(ri.order_item.product_id)
+        if req.kind == ReturnRequest.Kind.REFUND and req.refund_amount > 0:
+            order.refunded_total = money(order.refunded_total + req.refund_amount)
+            order.payment_status = (
+                Order.PaymentStatus.REFUNDED
+                if order.refunded_total >= order.grand_total
+                else Order.PaymentStatus.PARTIALLY_REFUNDED
+            )
+            order.save(update_fields=["refunded_total", "payment_status", "updated_at"])
+        if all(i.returned_quantity >= i.quantity for i in order.items.all()) and order.can_transition(Order.Status.RETURNED):
+            transition(order, Order.Status.RETURNED, by=by, note=f"Return {req.number} completed")
+    after_commit(lambda: emit("return.updated", return_id=req.pk))
+    return req

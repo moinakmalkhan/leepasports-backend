@@ -1,55 +1,68 @@
 from django.contrib import admin
+from django.db.models import Count
 from unfold.admin import ModelAdmin, TabularInline
 from unfold.decorators import display
 
-from .models import Cart, CartItem, SavedList, SavedListItem
+from .models import Cart, CartItem, Wishlist, WishlistItem
 
 
 class CartItemInline(TabularInline):
     model = CartItem
     extra = 0
-    fields = ("product", "fabric", "quantity", "unit_price", "line_total", "updated_at")
+    fields = ("variant", "quantity", "updated_at")
     readonly_fields = fields
     can_delete = False
-    show_change_link = False
+    max_num = 0
 
 
 @admin.register(Cart)
 class CartAdmin(ModelAdmin):
-    list_display = ("owner", "items_count", "value", "updated_at")
-    list_filter = ("currency",)
-    search_fields = ("company__name", "user__email", "guest_token")
+    """Abandoned-bag view: who left what behind."""
+
+    list_display = ("owner", "lines", "coupon_code", "updated_at")
+    search_fields = ("user__email", "guest_token")
     inlines = (CartItemInline,)
-    list_select_related = ("company", "user")
+    list_select_related = ("user",)
     readonly_fields = ("uid", "guest_token", "created_at", "updated_at")
+    ordering = ("-updated_at",)
 
-    @display(description="Owner")
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(_lines=Count("items")).filter(_lines__gt=0)
+
+    def has_add_permission(self, request):
+        return False
+
+    @display(description="Shopper")
     def owner(self, obj):
-        return (
-            f"{obj.company.name} · {obj.user.email}"
-            if obj.company_id
-            else (obj.user.email if obj.user_id else f"Guest {obj.guest_token[:8]}…")
-        )
+        return obj.user.email if obj.user_id else f"Guest {obj.guest_token[:8]}…"
 
-    @display(description="Items")
-    def items_count(self, obj):
-        return obj.items.count()
-
-    @display(description="Value")
-    def value(self, obj):
-        return f"{obj.currency} {sum(i.line_total for i in obj.items.all()):,.2f}"
+    @display(description="Lines", ordering="_lines")
+    def lines(self, obj):
+        return obj._lines
 
 
-class SavedListItemInline(TabularInline):
-    model = SavedListItem
+class WishlistItemInline(TabularInline):
+    model = WishlistItem
     extra = 0
-    fields = ("product", "fabric", "color", "notes")
+    fields = ("product", "variant", "added_at")
     readonly_fields = fields
+    can_delete = False
+    max_num = 0
 
 
-@admin.register(SavedList)
-class SavedListAdmin(ModelAdmin):
-    list_display = ("name", "company", "created_by", "is_shared", "updated_at")
-    search_fields = ("name", "company__name")
-    list_select_related = ("company", "created_by")
-    inlines = (SavedListItemInline,)
+@admin.register(Wishlist)
+class WishlistAdmin(ModelAdmin):
+    list_display = ("user", "count", "updated_at")
+    search_fields = ("user__email",)
+    inlines = (WishlistItemInline,)
+    list_select_related = ("user",)
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(_n=Count("items"))
+
+    def has_add_permission(self, request):
+        return False
+
+    @display(description="Items", ordering="_n")
+    def count(self, obj):
+        return obj._n

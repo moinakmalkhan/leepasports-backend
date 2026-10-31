@@ -1,5 +1,3 @@
-from decimal import Decimal
-
 from django.db import transaction
 from django.utils import timezone
 
@@ -11,15 +9,7 @@ from .models import Payment
 
 
 def create_pending_payment(order) -> Payment:
-    """50% deposit for prepaid-deposit companies, otherwise full amount."""
-    terms = order.payment_terms
-    if terms == "deposit_50":
-        amount, kind = money(order.grand_total * Decimal("0.5")), Payment.Kind.DEPOSIT
-    else:
-        amount, kind = order.grand_total, Payment.Kind.FULL
-    return Payment.objects.create(
-        order=order, kind=kind, method=order.payment_method, amount=amount, currency=order.currency, due_date=order.due_date
-    )
+    return Payment.objects.create(order=order, method=order.payment_method, amount=order.grand_total, currency=order.currency)
 
 
 @transaction.atomic
@@ -27,7 +17,7 @@ def submit_proof(payment: Payment, *, reference: str, proof=None, note: str = ""
     if payment.status not in (Payment.Status.PENDING, Payment.Status.FAILED):
         raise BusinessError("This payment has already been submitted.")
     payment.reference = reference[:120]
-    payment.note = note[:500]
+    payment.note = note[:300]
     if proof:
         payment.proof = proof
     payment.status = Payment.Status.SUBMITTED
@@ -39,7 +29,7 @@ def submit_proof(payment: Payment, *, reference: str, proof=None, note: str = ""
 
 @transaction.atomic
 def confirm(payment: Payment, *, by, amount=None) -> Payment:
-    from apps.orders.services import record_payment
+    from apps.orders.services import mark_paid
 
     payment = Payment.objects.select_for_update().select_related("order").get(pk=payment.pk)
     if payment.status == Payment.Status.CONFIRMED:
@@ -50,11 +40,5 @@ def confirm(payment: Payment, *, by, amount=None) -> Payment:
     payment.confirmed_at = timezone.now()
     payment.confirmed_by = by
     payment.save()
-    record_payment(payment.order, payment.amount)
-    if payment.kind == Payment.Kind.DEPOSIT:
-        balance = money(payment.order.grand_total - payment.order.amount_paid)
-        if balance > 0 and not Payment.objects.filter(order=payment.order, kind=Payment.Kind.BALANCE).exists():
-            Payment.objects.create(
-                order=payment.order, kind=Payment.Kind.BALANCE, method=payment.method, amount=balance, currency=payment.currency
-            )
+    mark_paid(payment.order, by=by, amount=payment.amount)
     return payment

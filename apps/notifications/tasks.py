@@ -14,17 +14,13 @@ def _enrich(context: dict) -> dict:
     if "order_id" in ctx:
         from apps.orders.models import Order
 
-        order = (
-            Order.objects.select_related("company", "placed_by", "shipping_method")
-            .prefetch_related("items")
-            .get(pk=ctx.pop("order_id"))
-        )
-        ctx.update(order=order, items=list(order.items.all()), company=order.company.name)
-    if "quote_id" in ctx:
-        from apps.quotes.models import Quote
+        order = Order.objects.select_related("user", "shipping_zone").prefetch_related("items").get(pk=ctx.pop("order_id"))
+        ctx.update(order=order, items=list(order.items.all()), address=order.shipping_address)
+    if "return_id" in ctx:
+        from apps.orders.models import ReturnRequest
 
-        quote = Quote.objects.select_related("company", "requested_by").prefetch_related("items").get(pk=ctx.pop("quote_id"))
-        ctx.update(quote=quote, items=list(quote.items.all()))
+        req = ReturnRequest.objects.select_related("order").prefetch_related("items__order_item").get(pk=ctx.pop("return_id"))
+        ctx.update(return_request=req, order=req.order, items=list(req.items.all()))
     return ctx
 
 
@@ -37,7 +33,8 @@ def send_email_task(
         **_enrich(context),
         "site_name": settings.SITE_NAME,
         "frontend_url": settings.FRONTEND_URL,
-        "support_email": settings.LEEPA["SUPPORT_EMAIL"],
+        "support_email": settings.SHOP["SUPPORT_EMAIL"],
+        "support_phone": settings.SHOP["SUPPORT_PHONE"],
         **context,
     }
     subject = subject or render_to_string(f"email/{template}.subject.txt", ctx).strip()

@@ -4,20 +4,22 @@ from django.contrib import admin
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
-from apps.core.views import HealthView
+from apps.core.views import HealthView, LocaleView
 
 api_v1 = [
     path("auth/", include("apps.accounts.urls.auth")),
     path("accounts/", include("apps.accounts.urls.accounts")),
     path("catalog/", include("apps.catalog.urls")),
-    path("pricing/", include("apps.pricing.urls")),
+    path("promotions/", include("apps.promotions.urls")),
     path("cart/", include("apps.cart.urls")),
-    path("quotes/", include("apps.quotes.urls")),
     path("orders/", include("apps.orders.urls")),
     path("payments/", include("apps.payments.urls")),
+    path("reviews/", include("apps.reviews.urls")),
+    path("content/", include("apps.content.urls")),
     path("notifications/", include("apps.notifications.urls")),
     path("search/", include("apps.search.urls")),
     path("chat/", include("apps.chat.urls")),
+    path("locale/", LocaleView.as_view(), name="locale"),
 ]
 
 urlpatterns = [

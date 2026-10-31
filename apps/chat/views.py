@@ -7,7 +7,6 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.core.exceptions import BusinessError
-from apps.core.mixins import CompanyContextMixin
 from apps.core.pagination import SmallPagination, TimelineCursorPagination
 from apps.core.throttling import ChatRateThrottle
 
@@ -16,7 +15,7 @@ from .models import Conversation, Message, Participant
 from .serializers import ConversationSerializer, MessageSerializer, PostMessageSerializer, StartConversationSerializer
 
 
-class ConversationViewSet(CompanyContextMixin, mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
+class ConversationViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet):
     permission_classes = (IsAuthenticated,)
     serializer_class = ConversationSerializer
     pagination_class = SmallPagination
@@ -26,17 +25,11 @@ class ConversationViewSet(CompanyContextMixin, mixins.ListModelMixin, mixins.Ret
 
     def get_queryset(self):
         user = self.request.user
-        base = Conversation.objects.select_related("company", "created_by", "assigned_to", "order", "quote")
-        if user.is_staff:
-            qs = base
-        elif self.request.company:
-            qs = base.filter(company=self.request.company)
-        else:
-            qs = base.filter(created_by=user)
+        base = Conversation.objects.select_related("created_by", "assigned_to", "order")
+        qs = base if user.is_staff else base.filter(created_by=user)
         last_read = Participant.objects.filter(conversation=OuterRef("pk"), user=user).values("last_read_at")[:1]
         return qs.annotate(
-            _last_read=Subquery(last_read),
-            unread_count=Count("messages", filter=Q(messages__created_at__gt=Subquery(last_read)) & ~Q(messages__sender=user)),
+            unread_count=Count("messages", filter=Q(messages__created_at__gt=Subquery(last_read)) & ~Q(messages__sender=user))
         )
 
     @extend_schema(request=StartConversationSerializer, responses=ConversationSerializer)
@@ -44,23 +37,16 @@ class ConversationViewSet(CompanyContextMixin, mixins.ListModelMixin, mixins.Ret
         serializer = StartConversationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        order = quote = None
+        order = None
         if data.get("order"):
             from apps.orders.models import Order
 
-            order = Order.objects.filter(uid=data["order"], company=request.company).first()
-        if data.get("quote"):
-            from apps.quotes.models import Quote
-
-            quote = Quote.objects.filter(uid=data["quote"], company=request.company).first()
-        subject = data.get("subject") or (
-            f"Order {order.number}" if order else f"Quote {quote.number}" if quote else "Sales enquiry"
-        )
+            order = Order.objects.filter(uid=data["order"], user=request.user).first()
+        subject = data.get("subject") or (f"Order {order.number}" if order else "Support request")
         conversation = services.start_conversation(
-            user=request.user, company=request.company, subject=subject, body=data["body"], order=order, quote=quote
+            user=request.user, subject=subject, body=data["body"], order=order, topic=data.get("topic", "")
         )
-        conversation = self.get_queryset().get(pk=conversation.pk)
-        return Response(ConversationSerializer(conversation).data, status=status.HTTP_201_CREATED)
+        return Response(ConversationSerializer(self.get_queryset().get(pk=conversation.pk)).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["get", "post"])
     def messages(self, request, uid=None):

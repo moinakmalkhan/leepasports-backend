@@ -24,13 +24,13 @@ env = environ.Env(
     CELERY_BROKER_URL=(str, "redis://127.0.0.1:6379/1"),
     CHANNEL_LAYER_URL=(str, "redis://127.0.0.1:6379/2"),
     EMAIL_BACKEND=(str, "django.core.mail.backends.console.EmailBackend"),
-    DEFAULT_FROM_EMAIL=(str, "Leepa Sports <no-reply@leepasports.com>"),
+    DEFAULT_FROM_EMAIL=(str, "Chobbar <no-reply@chobbar.shop>"),
     GOOGLE_OAUTH_CLIENT_ID=(str, ""),
-    SITE_NAME=(str, "Leepa Sports"),
+    SITE_NAME=(str, "Chobbar"),
     ADMIN_NOTIFICATION_EMAILS=(list, []),
     JWT_ACCESS_MINUTES=(int, 15),
     JWT_REFRESH_DAYS=(int, 7),
-    DEFAULT_CURRENCY=(str, "USD"),
+    DEFAULT_CURRENCY=(str, "PKR"),
 )
 environ.Env.read_env(BASE_DIR / ".env")
 
@@ -75,11 +75,12 @@ LOCAL_APPS = [
     "apps.core",
     "apps.accounts",
     "apps.catalog",
-    "apps.pricing",
+    "apps.promotions",
     "apps.cart",
-    "apps.quotes",
     "apps.orders",
     "apps.payments",
+    "apps.reviews",
+    "apps.content",
     "apps.notifications",
     "apps.search",
     "apps.chat",
@@ -92,6 +93,7 @@ MIDDLEWARE = [
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "apps.core.i18n.LanguageMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -125,7 +127,7 @@ TEMPLATES = [
 # ---------------------------------------------------------------------------
 DATABASES = {
     "default": {
-        **env.db("DATABASE_URL", default="postgres://postgres:postgres@127.0.0.1:5432/leepasports"),
+        **env.db("DATABASE_URL", default="postgres://postgres:postgres@127.0.0.1:5432/chobbar"),
         "CONN_MAX_AGE": env.int("DB_CONN_MAX_AGE", default=60),
         "CONN_HEALTH_CHECKS": True,
         "ATOMIC_REQUESTS": False,
@@ -142,7 +144,7 @@ CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
         "LOCATION": REDIS_URL,
-        "KEY_PREFIX": "leepa",
+        "KEY_PREFIX": "chobbar",
         "TIMEOUT": 300,
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
@@ -177,9 +179,9 @@ CELERY_TASK_TIME_LIMIT = 120
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 CELERY_BEAT_SCHEDULE = {
-    "expire-stale-quotes": {
-        "task": "apps.quotes.tasks.expire_stale_quotes",
-        "schedule": timedelta(hours=1),
+    "release-expired-stock-reservations": {
+        "task": "apps.orders.tasks.cancel_unpaid_bank_transfer_orders",
+        "schedule": timedelta(hours=6),
     },
     "release-abandoned-carts": {
         "task": "apps.cart.tasks.purge_abandoned_guest_carts",
@@ -253,8 +255,8 @@ SIMPLE_JWT = {
 }
 
 SPECTACULAR_SETTINGS = {
-    "TITLE": "Leepa Sports B2B API",
-    "DESCRIPTION": "Wholesale sportswear ordering platform.",
+    "TITLE": "Chobbar Shop API",
+    "DESCRIPTION": "Activewear & streetwear store — chobbar.shop",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "COMPONENT_SPLIT_REQUEST": True,
@@ -263,8 +265,11 @@ SPECTACULAR_SETTINGS = {
 # ---------------------------------------------------------------------------
 # I18N / static / media
 # ---------------------------------------------------------------------------
-LANGUAGE_CODE = "en-us"
-TIME_ZONE = "UTC"
+LANGUAGE_CODE = "en"
+LANGUAGES = [("en", "English"), ("ur", "اردو"), ("ar", "العربية")]
+LANGUAGE_COOKIE_NAME = "chobbar_lang"
+LOCALE_PATHS = [BASE_DIR / "locale"]
+TIME_ZONE = "Asia/Karachi"
 USE_I18N = True
 USE_TZ = True
 
@@ -300,14 +305,15 @@ CORS_ALLOWED_ORIGINS = env("CORS_ALLOWED_ORIGINS")
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
     "accept",
+    "accept-language",
+    "x-language",
     "authorization",
     "content-type",
     "x-request-id",
-    "x-company-id",
     "x-cart-token",
     "x-session-key",
 ]
-CORS_EXPOSE_HEADERS = ["x-request-id"]
+CORS_EXPOSE_HEADERS = ["x-request-id", "content-language"]
 CSRF_TRUSTED_ORIGINS = env("CSRF_TRUSTED_ORIGINS")
 X_FRAME_OPTIONS = "DENY"
 SECURE_CONTENT_TYPE_NOSNIFF = True
@@ -317,13 +323,16 @@ SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin"
 # ---------------------------------------------------------------------------
 # Business configuration
 # ---------------------------------------------------------------------------
-LEEPA = {
-    "CART_GUEST_TTL_DAYS": 14,
-    "QUOTE_VALIDITY_DAYS": 14,
-    "ORDER_NUMBER_PREFIX": "LS",
-    "QUOTE_NUMBER_PREFIX": "LQ",
-    "DEFAULT_LEAD_TIME_DAYS": 21,
-    "SUPPORT_EMAIL": env("SUPPORT_EMAIL", default="sales@leepasports.com"),
+SHOP = {
+    "CART_GUEST_TTL_DAYS": 30,
+    "ORDER_NUMBER_PREFIX": "CH",
+    "RETURN_NUMBER_PREFIX": "RT",
+    "RETURN_WINDOW_DAYS": 14,
+    "BANK_TRANSFER_HOLD_HOURS": 48,  # unpaid bank-transfer orders are auto-cancelled after this
+    "LOW_STOCK_THRESHOLD": 5,
+    "SUPPORT_EMAIL": env("SUPPORT_EMAIL", default="support@chobbar.shop"),
+    "SUPPORT_PHONE": env("SUPPORT_PHONE", default="+92 300 0000000"),
+    "STORE_ADDRESS": env("STORE_ADDRESS", default="Sialkot, Punjab, Pakistan"),
 }
 
 LOGGING = {

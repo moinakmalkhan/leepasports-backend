@@ -3,53 +3,39 @@ from django.db import transaction
 from django.db.models import Count
 from django.shortcuts import redirect
 from django.urls import reverse
-from django.utils import timezone
 from django.utils.html import format_html
 from unfold.admin import ModelAdmin, TabularInline
-from unfold.contrib.filters.admin import ChoicesDropdownFilter, RangeDateFilter, RangeNumericFilter, RelatedDropdownFilter
+from unfold.contrib.filters.admin import ChoicesDropdownFilter, RangeDateFilter, RangeNumericFilter
 from unfold.decorators import action, display
 from unfold.enums import ActionVariant
 
-from apps.core.admin_forms import CancelOrderForm, NoteForm, ShipOrderForm
+from apps.core.admin_forms import CancelOrderForm, ResolveReturnForm, ShipOrderForm
 from apps.core.admin_utils import STATUS_COLORS, export_csv
 from apps.core.exceptions import BusinessError
 
 from . import services
-from .models import Order, OrderItem, OrderStatusHistory, ShippingMethod
+from .models import Order, OrderItem, OrderStatusHistory, ReturnItem, ReturnRequest, ShippingZone
 
-
-class LateFilter(admin.SimpleListFilter):
-    title = "schedule"
-    parameter_name = "late"
-
-    def lookups(self, request, model_admin):
-        return (("1", "Behind estimated ship date"),)
-
-    def queryset(self, request, queryset):
-        if self.value() == "1":
-            return queryset.filter(
-                status__in=[Order.Status.CONFIRMED, Order.Status.IN_PRODUCTION, Order.Status.QUALITY_CHECK],
-                estimated_ship_date__lt=timezone.localdate(),
-            )
-        return queryset
+STATUS_COLORS.update(
+    {
+        "pending": "warning",
+        "processing": "info",
+        "out_for_delivery": "primary",
+        "returned": "default",
+        "cod_pending": "warning",
+        "partially_refunded": "info",
+        "requested": "warning",
+        "approved": "info",
+        "received": "info",
+    }
+)
 
 
 class ItemInline(TabularInline):
     model = OrderItem
     extra = 0
-    fields = ("image", "product_name", "sku", "fabric_name", "color", "sizes", "quantity", "unit_price", "line_total", "artwork")
-    readonly_fields = (
-        "image",
-        "product_name",
-        "sku",
-        "fabric_name",
-        "color",
-        "sizes",
-        "quantity",
-        "unit_price",
-        "line_total",
-        "artwork",
-    )
+    fields = ("image", "product_name", "variant_label", "sku", "quantity", "unit_price", "line_total", "returned_quantity")
+    readonly_fields = fields
     can_delete = False
     max_num = 0
     tab = True
@@ -57,14 +43,6 @@ class ItemInline(TabularInline):
     @display(description="")
     def image(self, obj):
         return format_html('<img src="{}" class="h-10 w-10 rounded object-cover"/>', obj.image_url) if obj.image_url else "—"
-
-    @display(description="Size breakdown")
-    def sizes(self, obj):
-        return format_html(
-            "<br>".join(
-                f"{line.get('gender', '').title()} {line.get('size')}: <b>{line.get('quantity')}</b>" for line in obj.breakdown
-            )
-        )
 
 
 class HistoryInline(TabularInline):
@@ -82,22 +60,19 @@ class HistoryInline(TabularInline):
 class OrderAdmin(ModelAdmin):
     list_display = (
         "number",
-        "company",
+        "customer",
+        "city",
         "status_badge",
         "payment_badge",
         "method",
         "total",
         "total_quantity",
-        "po_number",
-        "ship_by",
         "created_at",
     )
     list_filter = (
         ("status", ChoicesDropdownFilter),
         ("payment_status", ChoicesDropdownFilter),
         ("payment_method", ChoicesDropdownFilter),
-        LateFilter,
-        ("company", RelatedDropdownFilter),
         ("created_at", RangeDateFilter),
         ("grand_total", RangeNumericFilter),
     )
@@ -105,9 +80,10 @@ class OrderAdmin(ModelAdmin):
     list_filter_sheet = False
     search_fields = (
         "number",
-        "po_number",
-        "company__name",
-        "placed_by__email",
+        "email",
+        "phone",
+        "shipping_address__full_name",
+        "shipping_address__city",
         "items__product_name",
         "items__sku",
         "tracking_number",
@@ -115,49 +91,46 @@ class OrderAdmin(ModelAdmin):
     readonly_fields = (
         "uid",
         "number",
-        "company",
-        "placed_by",
-        "quote",
+        "user",
+        "email",
+        "phone",
         "status",
         "payment_status",
         "payment_method",
-        "payment_terms",
         "currency",
         "subtotal",
         "discount_total",
         "shipping_total",
-        "tax_total",
+        "cod_fee",
         "grand_total",
-        "amount_paid",
+        "refunded_total",
         "total_quantity",
-        "shipping_address_pretty",
-        "billing_address_pretty",
-        "approved_by",
-        "approved_at",
+        "coupon_code",
+        "shipping_zone",
+        "address_pretty",
         "confirmed_at",
         "shipped_at",
         "delivered_at",
         "cancelled_at",
+        "paid_at",
         "created_at",
         "updated_at",
         "payments_summary",
     )
     inlines = (ItemInline, HistoryInline)
-    list_select_related = ("company", "placed_by")
+    list_select_related = ("user",)
     date_hierarchy = "created_at"
-    actions = ("bulk_start_production", "export_orders", "export_picking_list")
+    actions = ("bulk_confirm", "bulk_processing", "export_orders", "export_packing_list")
     actions_detail = (
         "confirm_order",
-        "start_production",
-        "quality_check",
+        "start_packing",
         "ship_order",
+        "out_for_delivery",
         "mark_delivered",
-        "complete_order",
         "cancel_order",
-        "open_invoice",
         "message_customer",
     )
-    actions_row = ("ship_order",)
+    actions_row = ("confirm_order", "ship_order")
     compressed_fields = True
     fieldsets = (
         (
@@ -165,9 +138,9 @@ class OrderAdmin(ModelAdmin):
             {
                 "fields": (
                     ("number", "status", "payment_status"),
-                    ("company", "placed_by", "quote"),
-                    ("payment_method", "payment_terms", "po_number"),
-                    ("requested_delivery_date", "estimated_ship_date", "due_date"),
+                    ("user", "email", "phone"),
+                    ("payment_method", "coupon_code", "source"),
+                    ("estimated_delivery", "is_gift"),
                 )
             },
         ),
@@ -176,34 +149,22 @@ class OrderAdmin(ModelAdmin):
             {
                 "fields": (
                     ("subtotal", "discount_total", "shipping_total"),
-                    ("tax_total", "grand_total", "amount_paid"),
+                    ("cod_fee", "grand_total", "refunded_total"),
                     ("total_quantity", "currency"),
                     "payments_summary",
                 )
             },
         ),
-        (
-            "Shipping",
-            {
-                "fields": (
-                    "shipping_method",
-                    ("carrier", "tracking_number"),
-                    "tracking_url",
-                    "shipping_address_pretty",
-                    "billing_address_pretty",
-                )
-            },
-        ),
+        ("Delivery", {"fields": ("shipping_zone", ("carrier", "tracking_number"), "tracking_url", "address_pretty")}),
         ("Notes", {"fields": ("customer_notes", "internal_notes", "cancel_reason")}),
         (
             "Timeline",
             {
                 "classes": ("collapse",),
                 "fields": (
-                    ("approved_by", "approved_at"),
-                    ("confirmed_at", "shipped_at"),
-                    ("delivered_at", "cancelled_at"),
-                    ("created_at", "updated_at"),
+                    ("confirmed_at", "paid_at"),
+                    ("shipped_at", "delivered_at"),
+                    ("cancelled_at", "created_at", "updated_at"),
                     "uid",
                 ),
             },
@@ -211,12 +172,20 @@ class OrderAdmin(ModelAdmin):
     )
 
     def has_add_permission(self, request):
-        return False  # Orders are created through the storefront / quotes.
+        return False
 
     def get_queryset(self, request):
         return super().get_queryset(request).annotate(_items=Count("items"))
 
-    # --- columns -----------------------------------------------------------
+    @display(description="Customer")
+    def customer(self, obj):
+        name = obj.shipping_address.get("full_name") or obj.email
+        return format_html("<b>{}</b><br><span class='text-xs text-base-500'>{} · {}</span>", name, obj.phone, obj.email)
+
+    @display(description="City")
+    def city(self, obj):
+        return obj.shipping_address.get("city", "—")
+
     @display(description="Status", label=STATUS_COLORS)
     def status_badge(self, obj):
         return obj.status, obj.get_status_display()
@@ -227,84 +196,48 @@ class OrderAdmin(ModelAdmin):
 
     @display(description="Method")
     def method(self, obj):
-        return obj.get_payment_method_display()
+        return {"cod": "COD", "bank_transfer": "Bank", "card": "Card"}.get(obj.payment_method, obj.payment_method)
 
     @display(description="Total", ordering="grand_total")
     def total(self, obj):
-        return f"{obj.currency} {obj.grand_total:,.2f}"
+        return f"Rs {obj.grand_total:,.0f}"
 
-    @display(description="Ship by", ordering="estimated_ship_date")
-    def ship_by(self, obj):
-        if not obj.estimated_ship_date or not obj.is_open or obj.status == Order.Status.SHIPPED:
-            return obj.estimated_ship_date or "—"
-        late = obj.estimated_ship_date < timezone.localdate()
-        return format_html('<span class="{}">{}</span>', "text-red-600 font-semibold" if late else "", obj.estimated_ship_date)
-
-    def _address(self, data):
-        if not data:
-            return "—"
+    @display(description="Deliver to")
+    def address_pretty(self, obj):
+        a = obj.shipping_address or {}
         lines = [
-            data.get("contact_name"),
-            data.get("line1"),
-            data.get("line2"),
-            f"{data.get('city', '')} {data.get('state', '')} {data.get('postal_code', '')}".strip(),
-            data.get("country"),
-            data.get("contact_phone"),
+            a.get("full_name"),
+            a.get("line1"),
+            a.get("line2"),
+            f"{a.get('city', '')} {a.get('province', '')} {a.get('postal_code', '')}".strip(),
+            a.get("phone"),
         ]
-        return format_html("<br>".join(line for line in lines if line))
-
-    @display(description="Ship to")
-    def shipping_address_pretty(self, obj):
-        return self._address(obj.shipping_address)
-
-    @display(description="Bill to")
-    def billing_address_pretty(self, obj):
-        return self._address(obj.billing_address)
+        return format_html("<br>".join(line for line in lines if line)) if a else "—"
 
     @display(description="Payments")
     def payments_summary(self, obj):
         rows = [
-            f'<a class="underline" href="{reverse("admin:payments_payment_change", args=[p.pk])}">{p.get_kind_display()} · {p.currency} {p.amount:,.2f} · {p.get_status_display()}</a>'
+            f'<a class="underline" href="{reverse("admin:payments_payment_change", args=[p.pk])}">{p.method} · Rs {p.amount:,.0f} · {p.get_status_display()}</a>'
             for p in obj.payments.all()
         ]
-        return format_html("<br>".join(rows)) if rows else "—"
+        return format_html("<br>".join(rows)) if rows else ("Cash on delivery" if obj.payment_method == "cod" else "—")
 
-    # --- workflow actions ---------------------------------------------------
     def _transition(self, request, object_id, status, note="", **fields):
         order = Order.objects.get(pk=object_id)
         try:
             services.transition(order, status, by=request.user, note=note, **fields)
-            self.message_user(
-                request, f"{order.number} → {Order.Status(status).label}. The customer has been notified.", messages.SUCCESS
-            )
+            self.message_user(request, f"{order.number} → {Order.Status(status).label}. Customer notified.", messages.SUCCESS)
         except BusinessError as exc:
             self.message_user(request, str(exc.detail), messages.ERROR)
         return redirect(reverse("admin:orders_order_change", args=[object_id]))
 
-    @action(
-        description="Confirm order",
-        icon="check_circle",
-        variant=ActionVariant.SUCCESS,
-        permissions=("change",),
-        dialog={
-            "title": "Confirm order",
-            "description": "Marks payment arrangements as accepted and schedules production.",
-            "form_class": NoteForm,
-            "form_submit_text": "Confirm",
-        },
-    )
-    def confirm_order(self, request, form, object_id):
-        return self._transition(request, object_id, Order.Status.CONFIRMED, form.cleaned_data.get("note", ""))
+    @action(description="Confirm", icon="check_circle", variant=ActionVariant.SUCCESS, permissions=("change",))
+    def confirm_order(self, request, object_id):
+        return self._transition(request, object_id, Order.Status.CONFIRMED, "Order confirmed")
 
-    @action(
-        description="Start production", icon="precision_manufacturing", variant=ActionVariant.PRIMARY, permissions=("change",)
-    )
-    def start_production(self, request, object_id):
-        return self._transition(request, object_id, Order.Status.IN_PRODUCTION, "Cutting and stitching started")
-
-    @action(description="Move to QC", icon="fact_check", permissions=("change",))
-    def quality_check(self, request, object_id):
-        return self._transition(request, object_id, Order.Status.QUALITY_CHECK, "Final inspection and packing")
+    @action(description="Start packing", icon="inventory_2", permissions=("change",))
+    def start_packing(self, request, object_id):
+        return self._transition(request, object_id, Order.Status.PROCESSING, "Being packed")
 
     @action(
         description="Ship",
@@ -313,39 +246,34 @@ class OrderAdmin(ModelAdmin):
         permissions=("change",),
         dialog={
             "title": "Ship order",
-            "description": "Tracking details are emailed to the customer immediately.",
+            "description": "Tracking details are sent to the customer immediately.",
             "form_class": ShipOrderForm,
             "form_submit_text": "Mark as shipped",
         },
     )
     def ship_order(self, request, form, object_id):
         d = form.cleaned_data
-        return self._transition(
-            request,
-            object_id,
-            Order.Status.SHIPPED,
-            d.get("note") or f"Shipped via {d['carrier']}",
-            carrier=d["carrier"],
-            tracking_number=d["tracking_number"],
-            tracking_url=d.get("tracking_url", ""),
-        )
+        extra = {"carrier": d["carrier"], "tracking_number": d["tracking_number"], "tracking_url": d.get("tracking_url", "")}
+        if d.get("estimated_delivery"):
+            extra["estimated_delivery"] = d["estimated_delivery"]
+        return self._transition(request, object_id, Order.Status.SHIPPED, d.get("note") or f"Shipped via {d['carrier']}", **extra)
 
-    @action(description="Mark delivered", icon="inventory", permissions=("change",))
+    @action(description="Out for delivery", icon="two_wheeler", permissions=("change",))
+    def out_for_delivery(self, request, object_id):
+        return self._transition(request, object_id, Order.Status.OUT_FOR_DELIVERY, "Out for delivery")
+
+    @action(description="Delivered", icon="task_alt", variant=ActionVariant.SUCCESS, permissions=("change",))
     def mark_delivered(self, request, object_id):
         return self._transition(request, object_id, Order.Status.DELIVERED, "Delivered")
 
-    @action(description="Complete", icon="task_alt", variant=ActionVariant.SUCCESS, permissions=("change",))
-    def complete_order(self, request, object_id):
-        return self._transition(request, object_id, Order.Status.COMPLETED, "Order completed")
-
     @action(
-        description="Cancel order",
+        description="Cancel",
         icon="cancel",
         variant=ActionVariant.DANGER,
         permissions=("change",),
         dialog={
             "title": "Cancel order",
-            "description": "Releases credit and restores sales counters. The customer is notified.",
+            "description": "Restocks items and notifies the customer.",
             "form_class": CancelOrderForm,
             "form_submit_text": "Cancel order",
         },
@@ -353,37 +281,39 @@ class OrderAdmin(ModelAdmin):
     def cancel_order(self, request, form, object_id):
         order = Order.objects.get(pk=object_id)
         try:
-            services.cancel(order, by=request.user, reason=form.cleaned_data["reason"])
-            self.message_user(request, f"{order.number} cancelled.", messages.SUCCESS)
+            services.cancel(order, by=request.user, reason=form.cleaned_data["reason"], by_customer=False)
+            self.message_user(request, f"{order.number} cancelled and restocked.", messages.SUCCESS)
         except BusinessError as exc:
             self.message_user(request, str(exc.detail), messages.ERROR)
         return redirect(reverse("admin:orders_order_change", args=[object_id]))
-
-    @action(description="Invoice (API)", icon="receipt_long")
-    def open_invoice(self, request, object_id):
-        order = Order.objects.get(pk=object_id)
-        return redirect(f"/api/v1/orders/{order.uid}/invoice/")
 
     @action(description="Message customer", icon="forum")
     def message_customer(self, request, object_id):
         return redirect(reverse("admin:chat_conversation_changelist") + f"?order__id__exact={object_id}")
 
-    # --- bulk actions ---------------------------------------------------------
-    @action(description="Start production for selected", icon="precision_manufacturing")
-    def bulk_start_production(self, request, queryset):
+    @action(description="Confirm selected", icon="check_circle")
+    def bulk_confirm(self, request, queryset):
         done = skipped = 0
         with transaction.atomic():
             for order in queryset:
                 try:
-                    services.transition(order, Order.Status.IN_PRODUCTION, by=request.user, note="Cutting and stitching started")
+                    services.transition(order, Order.Status.CONFIRMED, by=request.user, note="Order confirmed")
                     done += 1
                 except BusinessError:
                     skipped += 1
-        self.message_user(
-            request,
-            f"{done} order(s) moved to production, {skipped} skipped (wrong status).",
-            messages.SUCCESS if done else messages.WARNING,
-        )
+        self.message_user(request, f"{done} confirmed, {skipped} skipped.", messages.SUCCESS if done else messages.WARNING)
+
+    @action(description="Start packing selected", icon="inventory_2")
+    def bulk_processing(self, request, queryset):
+        done = skipped = 0
+        with transaction.atomic():
+            for order in queryset:
+                try:
+                    services.transition(order, Order.Status.PROCESSING, by=request.user, note="Being packed")
+                    done += 1
+                except BusinessError:
+                    skipped += 1
+        self.message_user(request, f"{done} moved to packing, {skipped} skipped.", messages.SUCCESS if done else messages.WARNING)
 
     @action(description="Export selected to CSV", icon="download")
     def export_orders(self, request, queryset):
@@ -391,67 +321,141 @@ class OrderAdmin(ModelAdmin):
             "orders",
             [
                 "Number",
-                "Company",
+                "Customer",
+                "Phone",
+                "Email",
+                "City",
                 "Status",
                 "Payment status",
                 "Method",
-                "PO",
-                "Currency",
                 "Subtotal",
-                "Shipping",
+                "Discount",
+                "Delivery",
+                "COD fee",
                 "Total",
-                "Paid",
-                "Pieces",
+                "Items",
                 "Placed",
-                "Est. ship",
                 "Tracking",
             ],
             (
                 (
                     o.number,
-                    o.company.name,
+                    o.shipping_address.get("full_name"),
+                    o.phone,
+                    o.email,
+                    o.shipping_address.get("city"),
                     o.status,
                     o.payment_status,
                     o.payment_method,
-                    o.po_number,
-                    o.currency,
                     o.subtotal,
+                    o.discount_total,
                     o.shipping_total,
+                    o.cod_fee,
                     o.grand_total,
-                    o.amount_paid,
                     o.total_quantity,
                     o.created_at.date(),
-                    o.estimated_ship_date,
                     o.tracking_number,
                 )
-                for o in queryset.select_related("company")
+                for o in queryset
             ),
         )
 
-    @action(description="Export picking list (sizes)", icon="list_alt")
-    def export_picking_list(self, request, queryset):
-        rows = []
-        for item in OrderItem.objects.filter(order__in=queryset).select_related("order").order_by("order__number", "id"):
-            for line in item.breakdown:
-                rows.append(
-                    (
-                        item.order.number,
-                        item.sku,
-                        item.product_name,
-                        item.fabric_name,
-                        item.color,
-                        line.get("gender"),
-                        line.get("size"),
-                        line.get("quantity"),
-                    )
-                )
-        return export_csv("picking-list", ["Order", "SKU", "Product", "Fabric", "Color", "Gender", "Size", "Qty"], rows)
+    @action(description="Export packing list", icon="list_alt")
+    def export_packing_list(self, request, queryset):
+        rows = [
+            (
+                i.order.number,
+                i.order.shipping_address.get("full_name"),
+                i.order.shipping_address.get("city"),
+                i.sku,
+                i.product_name,
+                i.variant_label,
+                i.quantity,
+            )
+            for i in OrderItem.objects.filter(order__in=queryset).select_related("order").order_by("order__number", "id")
+        ]
+        return export_csv("packing-list", ["Order", "Customer", "City", "SKU", "Product", "Variant", "Qty"], rows)
 
 
-@admin.register(ShippingMethod)
-class ShippingMethodAdmin(ModelAdmin):
-    list_display = ("name", "code", "base_price", "price_per_kg", "transit", "is_active", "sort_order")
-    list_editable = ("base_price", "price_per_kg", "is_active", "sort_order")
+class ReturnItemInline(TabularInline):
+    model = ReturnItem
+    extra = 0
+    fields = ("order_item", "quantity", "exchange_variant")
+    readonly_fields = ("order_item", "quantity", "exchange_variant")
+    can_delete = False
+    max_num = 0
+
+
+@admin.register(ReturnRequest)
+class ReturnRequestAdmin(ModelAdmin):
+    list_display = ("number", "order_link", "kind", "reason", "status_badge", "refund", "created_at", "resolved_at")
+    list_filter = (
+        ("status", ChoicesDropdownFilter),
+        ("kind", ChoicesDropdownFilter),
+        ("reason", ChoicesDropdownFilter),
+        ("created_at", RangeDateFilter),
+    )
+    list_filter_submit = True
+    search_fields = ("number", "order__number", "order__email", "order__phone")
+    readonly_fields = ("uid", "number", "order", "user", "kind", "reason", "details", "image", "created_at", "resolved_at")
+    inlines = (ReturnItemInline,)
+    list_select_related = ("order",)
+    actions_detail = ("resolve",)
+    actions_row = ("resolve",)
+
+    def has_add_permission(self, request):
+        return False
+
+    @display(description="Order")
+    def order_link(self, obj):
+        return format_html(
+            '<a class="underline" href="{}">{}</a>', reverse("admin:orders_order_change", args=[obj.order_id]), obj.order.number
+        )
+
+    @display(description="Status", label=STATUS_COLORS)
+    def status_badge(self, obj):
+        return obj.status, obj.get_status_display()
+
+    @display(description="Refund")
+    def refund(self, obj):
+        return f"Rs {obj.refund_amount:,.0f}" if obj.refund_amount else "—"
+
+    @action(
+        description="Resolve",
+        icon="rule",
+        variant=ActionVariant.PRIMARY,
+        permissions=("change",),
+        dialog={
+            "title": "Update return request",
+            "description": "Completing a refund restocks the items and records the refund on the order.",
+            "form_class": ResolveReturnForm,
+            "form_submit_text": "Update",
+        },
+    )
+    def resolve(self, request, form, object_id):
+        req = ReturnRequest.objects.get(pk=object_id)
+        d = form.cleaned_data
+        try:
+            services.resolve_return(
+                req,
+                status=d["status"],
+                by=request.user,
+                staff_notes=d.get("staff_notes", ""),
+                refund_amount=d.get("refund_amount"),
+                refund_method=d.get("refund_method", ""),
+            )
+            self.message_user(
+                request, f"{req.number} → {ReturnRequest.Status(d['status']).label}. Customer notified.", messages.SUCCESS
+            )
+        except BusinessError as exc:
+            self.message_user(request, str(exc.detail), messages.ERROR)
+        return redirect(reverse("admin:orders_returnrequest_change", args=[object_id]))
+
+
+@admin.register(ShippingZone)
+class ShippingZoneAdmin(ModelAdmin):
+    list_display = ("name", "rate", "free_over", "cod_fee", "transit", "is_default", "is_active", "sort_order")
+    list_editable = ("rate", "free_over", "cod_fee", "is_active", "sort_order")
 
     @display(description="Transit")
     def transit(self, obj):

@@ -1,1 +1,1 @@
-Order {{ order.number }} received — {{ site_name }}
+Order {{ order.number }} confirmed — {{ site_name }}

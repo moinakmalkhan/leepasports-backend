@@ -1,0 +1,1 @@
+{{ return_request.number }}: {{ return_request.get_status_display }}

@@ -4,8 +4,13 @@ from rest_framework.routers import SimpleRouter
 from . import views
 
 router = SimpleRouter()
-router.register("shipping-methods", views.ShippingMethodListView, basename="shipping-methods")
 router.register("staff", views.StaffOrderViewSet, basename="staff-orders")
+router.register("returns", views.ReturnViewSet, basename="returns")
 router.register("", views.OrderViewSet, basename="orders")
 
-urlpatterns = [path("track/", views.PublicOrderTrackingView.as_view(), name="order-track"), *router.urls]
+urlpatterns = [
+    path("checkout/", views.CheckoutView.as_view(), name="checkout"),
+    path("shipping-quote/", views.ShippingQuoteView.as_view(), name="shipping-quote"),
+    path("track/", views.PublicOrderTrackingView.as_view(), name="order-track"),
+    *router.urls,
+]

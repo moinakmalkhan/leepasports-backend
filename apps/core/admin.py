@@ -9,8 +9,8 @@ from rest_framework_simplejwt.token_blacklist.admin import BlacklistedTokenAdmin
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from unfold.admin import ModelAdmin
 
-admin.site.site_header = "Leepa Sports"
-admin.site.site_title = "Leepa Sports Operations"
+admin.site.site_header = "Chobbar"
+admin.site.site_title = "Chobbar Shop Admin"
 admin.site.index_title = "Dashboard"
 
 # Hide noisy third-party models from the panel; re-register with Unfold styling where useful.

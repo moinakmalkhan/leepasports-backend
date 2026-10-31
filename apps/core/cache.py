@@ -32,8 +32,11 @@ def invalidate_namespace(namespace: str) -> None:
 
 
 def make_key(namespace: str, *parts) -> str:
+    """Keys are language-scoped so translated payloads never leak across locales."""
+    from django.utils import translation
+
     joined = ":".join(str(p) for p in parts)
-    return f"{namespace}:v{namespace_version(namespace)}:{joined}"
+    return f"{namespace}:v{namespace_version(namespace)}:{translation.get_language() or 'en'}:{joined}"
 
 
 def cached(namespace: str, timeout: int = 300):

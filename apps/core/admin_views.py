@@ -14,7 +14,7 @@ from apps.orders.models import Order, OrderItem
 
 from .admin_utils import export_csv
 
-REVENUE_STATUSES = [s for s in Order.Status if s not in (Order.Status.CANCELLED, Order.Status.PENDING_APPROVAL)]
+REVENUE_STATUSES = [s for s in Order.Status if s not in (Order.Status.CANCELLED, Order.Status.RETURNED)]
 
 
 class ReportForm(forms.Form):
@@ -82,7 +82,7 @@ class ReportsView(UnfoldSiteViewMixin, TemplateView):
         if request.GET.get("export") == "csv":
             return export_csv(
                 f"sales-by-{params['group_by']}",
-                ["Label", "Code", "Pieces", "Orders", "Revenue"],
+                ["Label", "Code", "Items", "Orders", "Revenue"],
                 ([r["label"], r.get("code", ""), r["pcs"], r["orders"], r["rev"]] for r in rows),
             )
         totals = {
@@ -93,7 +93,7 @@ class ReportsView(UnfoldSiteViewMixin, TemplateView):
             ).count(),
         }
         table = {
-            "headers": ["Label", "Code", "Pieces", "Orders", "Revenue"],
+            "headers": ["Label", "Code", "Items", "Orders", "Revenue"],
             "rows": [
                 [r["label"], r.get("code") or "—", f"{r['pcs'] or 0:,}", r["orders"], f"{r['rev'] or 0:,.2f}"] for r in rows
             ],
